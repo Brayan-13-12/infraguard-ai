@@ -1,0 +1,6 @@
+# pnpm reads package-level settings from this file (pnpm >= 10).
+#
+# unrs-resolver is a transitive native package (eslint-config-next's TypeScript
+# import resolver). Its install script only selects a prebuilt platform binary.
+allowBuilds:
+  unrs-resolver: true
