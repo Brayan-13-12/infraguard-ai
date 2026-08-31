@@ -1,0 +1,123 @@
+# ---------------------------------------------------------------------------
+# InfraGuard AI - v0.1 local environment
+#
+#   cp .env.example .env      # then adjust values if you wish
+#   docker compose up --build
+#
+# Endpoints:
+#   Frontend  -> http://localhost:3000
+#   Backend   -> http://localhost:8000        (Swagger at /docs)
+#   Liveness  -> http://localhost:8000/api/v1/health/live
+#   Readiness -> http://localhost:8000/api/v1/health/ready
+#
+# Network segmentation (least privilege):
+#
+#   Browser ──▶ frontend ──[edge]──▶ backend ──[data]──▶ db
+#
+#   - frontend joins ONLY `edge`  -> it cannot reach PostgreSQL
+#   - db       joins ONLY `data`  -> internal, no outbound internet
+#   - backend  joins BOTH         -> the only bridge between tiers
+#
+# PostgreSQL publishes no host port. Frontend/backend bind to 127.0.0.1 only.
+# `${VAR:-default}` fallbacks are non-secret local-dev values so the stack also
+# starts without a .env file. Setting ENVIRONMENT=production makes the backend
+# reject these placeholder credentials at startup.
+# ---------------------------------------------------------------------------
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+services:
+  db:
+    <<: *hardening
+    image: postgres:17.2-alpine@sha256:7e5df973a74872482e320dcbdeb055e178d6f42de0558b083892c50cda833c96
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-infraguard}
+      POSTGRES_USER: ${POSTGRES_USER:-infraguard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_for_local_development}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    tmpfs:
+      - /tmp
+      - /run/postgresql
+    cap_drop:
+      - ALL
+    cap_add:
+      # Minimum set the official entrypoint needs to chown the data dir and
+      # drop privileges from root to the postgres user.
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-infraguard} -d ${POSTGRES_DB:-infraguard}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - data
+
+  backend:
+    <<: *hardening
+    build:
+      context: ./backend
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      POSTGRES_DB: ${POSTGRES_DB:-infraguard}
+      POSTGRES_USER: ${POSTGRES_USER:-infraguard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_for_local_development}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      # Optional explicit override; empty -> backend assembles from the parts above.
+      DATABASE_URL: ${DATABASE_URL:-}
+      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-http://localhost:3000}
+    ports:
+      - "127.0.0.1:8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - edge
+      - data
+
+  frontend:
+    <<: *hardening
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "127.0.0.1:3000:3000"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache
+    cap_drop:
+      - ALL
+    depends_on:
+      backend:
+        # Backend healthcheck is liveness-only, so the frontend starts as soon
+        # as the API process is up - even if PostgreSQL is unavailable.
+        condition: service_healthy
+    networks:
+      - edge
+
+volumes:
+  pgdata:
+
+networks:
+  edge:
+    driver: bridge
+  data:
+    driver: bridge
+    # No route to the outside world: PostgreSQL has no reason to reach the internet.
+    internal: true
