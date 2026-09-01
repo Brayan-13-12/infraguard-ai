@@ -5,9 +5,14 @@ import { useEffect, useState } from "react";
 
 import { AuthForm } from "@/components/AuthForm";
 import { useAuth } from "@/components/AuthProvider";
+import { AuthLayout } from "@/components/auth/AuthLayout";
+import { Alert } from "@/components/ui/Alert";
+import { Button } from "@/components/ui/Button";
+import { useTranslation } from "@/i18n";
 
 export default function RegisterPage() {
   const { status, register } = useAuth();
+  const { t } = useTranslation();
   const router = useRouter();
   const [registeredEmail, setRegisteredEmail] = useState<string | null>(null);
 
@@ -16,20 +21,18 @@ export default function RegisterPage() {
   }, [status, router]);
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-sm flex-col items-center justify-center gap-6 px-6 py-16">
-      <h2 className="text-2xl font-bold tracking-tight">InfraGuard AI</h2>
+    <AuthLayout>
       {registeredEmail ? (
-        <div className="w-full max-w-sm rounded-xl border border-emerald-200 bg-emerald-50 p-6 text-sm dark:border-emerald-900 dark:bg-emerald-950/40">
-          <p className="font-medium text-emerald-800 dark:text-emerald-300">
-            Account created for {registeredEmail}.
-          </p>
-          <button
-            type="button"
-            onClick={() => router.replace("/login")}
-            className="mt-4 w-full rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white dark:bg-slate-100 dark:text-slate-900"
-          >
-            Continue to sign in
-          </button>
+        <div className="motion-safe:animate-fade-in-up">
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">
+            {t("auth.registeredTitle")}
+          </h1>
+          <Alert tone="success" className="mt-4">
+            {t("auth.registeredBody", { email: registeredEmail })}
+          </Alert>
+          <Button fullWidth className="mt-5" onClick={() => router.replace("/login")}>
+            {t("auth.registeredContinue")}
+          </Button>
         </div>
       ) : (
         <AuthForm
@@ -38,6 +41,6 @@ export default function RegisterPage() {
           onSuccess={(user) => setRegisteredEmail(user.email)}
         />
       )}
-    </main>
+    </AuthLayout>
   );
 }

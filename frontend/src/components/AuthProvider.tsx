@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 
+import { useTranslation, type TranslationKey } from "@/i18n";
 import * as authService from "@/services/auth";
 import type { AuthFailure, AuthResult, LogoutResult, User } from "@/types/auth";
 
@@ -28,35 +29,31 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function messageFor(failure: AuthFailure): string | null {
-  switch (failure.kind) {
-    case "unauthenticated":
-      return null; // expected - simply not signed in
-    case "unreachable":
-    case "unexpected":
-    case "invalid_credentials":
-    case "rate_limited":
-      return failure.message;
-    default:
-      return null;
-  }
-}
+const FAILURE_MESSAGE_KEYS: Partial<Record<AuthFailure["kind"], TranslationKey>> = {
+  unreachable: "auth.formErrors.unreachable",
+  unexpected: "auth.formErrors.unexpected",
+  invalid_credentials: "auth.formErrors.invalidCredentials",
+  rate_limited: "auth.formErrors.rateLimited",
+};
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
   const [status, setStatus] = useState<AuthStatus>("loading");
-  const [error, setError] = useState<string | null>(null);
+  // The failure *kind* is stored, not prose, so the surfaced message follows the
+  // active language. "unauthenticated" (simply not signed in) surfaces nothing.
+  const [errorKind, setErrorKind] = useState<AuthFailure["kind"] | null>(null);
 
   const refresh = useCallback(async () => {
     const result = await authService.fetchMe();
     if (result.ok) {
       setUser(result.data);
       setStatus("authenticated");
-      setError(null);
+      setErrorKind(null);
     } else {
       setUser(null);
       setStatus("unauthenticated");
-      setError(messageFor(result.error));
+      setErrorKind(result.error.kind);
     }
   }, []);
 
@@ -69,7 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (result.ok) {
       setUser(result.data);
       setStatus("authenticated");
-      setError(null);
+      setErrorKind(null);
     }
     return result;
   }, []);
@@ -85,13 +82,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Only NOW is the cookie confirmed cleared server-side.
       setUser(null);
       setStatus("unauthenticated");
-      setError(null);
+      setErrorKind(null);
     } else {
       // The session cookie may still be valid - stay authenticated and surface it.
-      setError(messageFor(result.error));
+      setErrorKind(result.error.kind);
     }
     return result;
   }, []);
+
+  const error = useMemo(() => {
+    if (!errorKind) return null;
+    const key = FAILURE_MESSAGE_KEYS[errorKind];
+    return key ? t(key) : null;
+  }, [errorKind, t]);
 
   const value = useMemo<AuthContextValue>(
     () => ({ user, status, error, refresh, login, register, logout }),

@@ -36,7 +36,7 @@ describe("RequireAuth", () => {
   it("shows a checking state while the session resolves", () => {
     vi.spyOn(authService, "fetchMe").mockReturnValue(new Promise(() => {}));
     renderGuarded();
-    expect(screen.getByText(/checking your session/i)).toBeInTheDocument();
+    expect(screen.getByText(/comprobando tu sesión/i)).toBeInTheDocument();
     expect(screen.queryByText("secret dashboard")).not.toBeInTheDocument();
   });
 

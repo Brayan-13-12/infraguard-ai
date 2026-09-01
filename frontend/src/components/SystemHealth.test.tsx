@@ -9,8 +9,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const FRONTEND = "Frontend";
+const BACKEND = "API del backend";
+const DATABASE = "Base de datos PostgreSQL";
+const OPERATIONAL = "Operativo";
+const UNAVAILABLE = "No disponible";
+const UNKNOWN = "Desconocido";
+
 function row(name: string): HTMLElement {
-  // Each status row is a <li> containing the component name.
   const label = screen.getByText(name);
   const li = label.closest("li");
   if (!li) throw new Error(`row not found for ${name}`);
@@ -21,7 +27,7 @@ describe("SystemHealthPanel", () => {
   it("shows the frontend as operational immediately", () => {
     vi.spyOn(healthService, "fetchBackendHealth").mockReturnValue(new Promise(() => {}));
     render(<SystemHealthPanel />);
-    expect(within(row("Frontend")).getByText("Operational")).toBeInTheDocument();
+    expect(within(row(FRONTEND)).getByText(OPERATIONAL)).toBeInTheDocument();
   });
 
   it("renders backend and database as operational when the API is healthy", async () => {
@@ -33,12 +39,12 @@ describe("SystemHealthPanel", () => {
     render(<SystemHealthPanel />);
 
     await waitFor(() =>
-      expect(within(row("Backend API")).getByText("Operational")).toBeInTheDocument(),
+      expect(within(row(BACKEND)).getByText(OPERATIONAL)).toBeInTheDocument(),
     );
-    expect(within(row("PostgreSQL Database")).getByText("Operational")).toBeInTheDocument();
+    expect(within(row(DATABASE)).getByText(OPERATIONAL)).toBeInTheDocument();
   });
 
-  it("marks the database unavailable but backend operational on a 503 degraded response", async () => {
+  it("marks the database unavailable but backend operational on a degraded response", async () => {
     vi.spyOn(healthService, "fetchBackendHealth").mockResolvedValue({
       ok: true,
       data: { status: "not_ready", service: "infraguard-api", database: "unhealthy" },
@@ -47,9 +53,9 @@ describe("SystemHealthPanel", () => {
     render(<SystemHealthPanel />);
 
     await waitFor(() =>
-      expect(within(row("PostgreSQL Database")).getByText("Unavailable")).toBeInTheDocument(),
+      expect(within(row(DATABASE)).getByText(UNAVAILABLE)).toBeInTheDocument(),
     );
-    expect(within(row("Backend API")).getByText("Operational")).toBeInTheDocument();
+    expect(within(row(BACKEND)).getByText(OPERATIONAL)).toBeInTheDocument();
   });
 
   it("marks the backend unavailable when the API is unreachable", async () => {
@@ -62,9 +68,9 @@ describe("SystemHealthPanel", () => {
     render(<SystemHealthPanel />);
 
     await waitFor(() =>
-      expect(within(row("Backend API")).getByText("Unavailable")).toBeInTheDocument(),
+      expect(within(row(BACKEND)).getByText(UNAVAILABLE)).toBeInTheDocument(),
     );
-    expect(within(row("PostgreSQL Database")).getByText("Unknown")).toBeInTheDocument();
+    expect(within(row(DATABASE)).getByText(UNKNOWN)).toBeInTheDocument();
   });
 
   it("re-queries the API when Refresh is clicked", async () => {
@@ -83,13 +89,13 @@ describe("SystemHealthPanel", () => {
     render(<SystemHealthPanel />);
 
     await waitFor(() =>
-      expect(within(row("Backend API")).getByText("Unavailable")).toBeInTheDocument(),
+      expect(within(row(BACKEND)).getByText(UNAVAILABLE)).toBeInTheDocument(),
     );
 
-    await userEvent.click(screen.getByRole("button", { name: /refresh/i }));
+    await userEvent.click(screen.getByRole("button", { name: /actualizar/i }));
 
     await waitFor(() =>
-      expect(within(row("Backend API")).getByText("Operational")).toBeInTheDocument(),
+      expect(within(row(BACKEND)).getByText(OPERATIONAL)).toBeInTheDocument(),
     );
     expect(spy).toHaveBeenCalledTimes(2);
   });

@@ -46,7 +46,7 @@ infraguard-ai/
 ## 3. Frontend architecture
 
 - **Next.js App Router** with strict TypeScript (`strict`, `noUncheckedIndexedAccess`).
-- **Tailwind CSS 3** for styling.
+- **Tailwind CSS 3** for styling, driven by **semantic CSS-variable tokens**.
 - **pnpm** (pinned via `packageManager: pnpm@11.24.0`).
 - **ESLint 9 flat config** (`eslint.config.mjs`, run as `eslint .` - not the
   deprecated `next lint`).
@@ -54,13 +54,75 @@ infraguard-ai/
 
 ```
 frontend/src/
-├── app/          Routes, layout, global styles (App Router)
-│   └── healthz/  Route handler returning exactly HTTP 200 (frontend liveness)
-├── components/   SystemHealth panel (client component) + tests
-├── lib/          Client config (reads NEXT_PUBLIC_API_URL)
-├── services/     API access layer (fetchBackendHealth) + tests
+├── app/          Routes (/ · /login · /register · /dashboard · /healthz), layout, global styles
+├── components/
+│   ├── ui/       Internal design system (Button, Input, Card, Badge, Alert, PageHeader, Spinner, EmptyState, Reveal)
+│   ├── theme/    ThemeProvider (next-themes) + ThemeToggle (single contextual button)
+│   ├── shell/    Authenticated app shell (Sidebar, SidebarFooter, Topbar, MobileNav, NavList, LogoutButton)
+│   ├── auth/     AuthLayout (single centered card)
+│   └── ...       AuthProvider, RequireAuth, AuthForm, SystemHealth, LanguageSwitcher
+├── i18n/         LanguageProvider + useTranslation(); translations/{es,en}.ts (es is the source of truth)
+├── lib/          Client config, validation, navigation model, cn() util
+├── services/     API access layer (never throws) + tests
 └── types/        Shared types + runtime type guards + tests
 ```
+
+### UI foundation, theming & i18n (v0.3)
+
+- **i18n:** a dependency-free layer in `src/i18n/`. **Spanish is the default**,
+  English is the alternative. `LanguageProvider` / `useTranslation()` expose
+  `t(key, vars?)` with type-checked dot-path keys, `{var}` interpolation, and an
+  active-language → Spanish → key fallback chain. `en.ts` is typed against the
+  shape of `es.ts`, so a missing translation is a compile error. Server + first
+  client render use Spanish; a persisted choice (`localStorage`,
+  `infraguard.language` - non-sensitive) is applied after mount, and `<html
+  lang>` is kept in sync. Descriptive copy - auth content, forms, validation,
+  dashboard descriptions, account labels, system health, guards, errors, a11y
+  labels - goes through `t()`. **Product/module proper nouns stay English in
+  every locale**: `InfraGuard AI`, the sidebar nav labels (`Dashboard` /
+  `Assets` / `Incidents` / `AI Assistant` / `Settings`), the `Dashboard` page
+  heading, the dashboard module names, and the `Coming soon` marker - these are
+  literals, not translation keys. `<LanguageSwitcher />` is a labelled `ES | EN`
+  button group.
+- **Theme:** `next-themes` (~3.5 KB, zero deps) still provides light / dark /
+  system with `localStorage` persistence, OS-preference on first visit, and an
+  inline pre-hydration script - **no flash, no mismatch**
+  (`<html suppressHydrationWarning>`, `darkMode: "class"`). The stored value is a
+  non-sensitive UI preference - **auth data is never in `localStorage`**.
+  `<ThemeToggle />` is now a **single contextual button**: it renders the icon of
+  the target mode (sun while dark, moon while light) with a matching
+  `aria-label`. "System" is no longer exposed in the UI; the first explicit tap
+  persists a concrete `light` / `dark` value.
+- **Tokens:** `--background / --foreground / --surface / --surface-elevated /
+  --border / --muted(-foreground) / --primary(-hover/-foreground) / --success /
+  --warning / --danger / --ring` defined for `:root` and `.dark` in
+  `globals.css`, mapped to Tailwind utilities in `tailwind.config.ts`.
+  Components reference tokens only - no scattered hex.
+- **Motion:** a small reusable system - entrance keyframes (`fade-in`,
+  `fade-in-up`, `scale-in`, `slide-in-left`, 150-260ms) in `tailwind.config.ts`
+  and a `<Reveal>` primitive for staggered section entrances. Interaction stays
+  hover/focus colour + small transforms. All gated by `motion-safe:` /
+  `motion-reduce:` and the global `prefers-reduced-motion` rule. No animation
+  library.
+- **App shell:** `AppShell` = desktop sidebar / mobile portalled drawer. The
+  **sidebar** owns navigation plus a footer with the language switcher, theme
+  toggle, signed-in identity and a **confirmation-gated `LogoutButton`** (a first
+  tap arms an explicit Confirm / Cancel; state clears only on
+  `logout() → { ok: true }`). The `Topbar` is now mobile-only (drawer trigger +
+  brand); the drawer repeats the sidebar footer controls. Only **Dashboard** is
+  a real route; Assets / Incidents / AI Assistant / Settings show as disabled
+  "Coming soon".
+- **Auth screens:** `AuthLayout` is a **single self-contained centered card** at
+  every width, on a restrained backdrop (faint primary glow + masked grid).
+  There is no page-level header; a compact in-card row holds the `InfraGuard AI`
+  brand (left) and the language switcher + theme toggle (right), above the form.
+  `AuthForm` keeps a show/hide-password control, `autocomplete` attributes,
+  field-linked errors (translated from stable validation codes) and a brief
+  success confirmation before navigation. **No authentication behaviour
+  changed** - same `AuthForm` submit path, same `onSubmit` / `onSuccess`
+  contract, same HttpOnly-cookie flow.
+- **Responsive:** mobile-first; `html, body { overflow-x: hidden }` guard;
+  verified 360-1440px with no horizontal overflow.
 
 The landing/dashboard page shows the platform name, tagline, and a **System
 health** panel with three rows: Frontend, Backend API, PostgreSQL Database.

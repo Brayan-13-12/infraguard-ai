@@ -5,6 +5,7 @@ import { useEffect } from "react";
 
 import { AuthForm } from "@/components/AuthForm";
 import { useAuth } from "@/components/AuthProvider";
+import { AuthLayout } from "@/components/auth/AuthLayout";
 
 export default function LoginPage() {
   const { status, login } = useAuth();
@@ -15,13 +16,12 @@ export default function LoginPage() {
   }, [status, router]);
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-sm flex-col items-center justify-center gap-6 px-6 py-16">
-      <h2 className="text-2xl font-bold tracking-tight">InfraGuard AI</h2>
+    <AuthLayout>
       <AuthForm
         mode="login"
         onSubmit={login}
         onSuccess={() => router.replace("/dashboard")}
       />
-    </main>
+    </AuthLayout>
   );
 }
