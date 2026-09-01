@@ -3,8 +3,17 @@
 import Link from "next/link";
 import { useState } from "react";
 
-import { PASSWORD_MIN_LENGTH } from "@/lib/config";
-import { CredentialErrors, validateLogin, validateRegistration } from "@/lib/validation";
+import { Alert } from "@/components/ui/Alert";
+import { Button } from "@/components/ui/Button";
+import { CheckIcon, EyeIcon, EyeOffIcon } from "@/components/ui/icons";
+import { Input } from "@/components/ui/Input";
+import { useTranslation, type TranslationKey } from "@/i18n";
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "@/lib/config";
+import {
+  validateLogin,
+  validateRegistration,
+  type ValidationCode,
+} from "@/lib/validation";
 import type { AuthFailure, AuthResult, User } from "@/types/auth";
 
 interface AuthFormProps {
@@ -13,147 +22,190 @@ interface AuthFormProps {
   onSuccess: (user: User) => void;
 }
 
-const COPY = {
-  login: {
-    title: "Sign in",
-    submit: "Sign in",
-    alt: "Need an account?",
-    altHref: "/register",
-    altLabel: "Create one",
-  },
-  register: {
-    title: "Create your account",
-    submit: "Create account",
-    alt: "Already registered?",
-    altHref: "/login",
-    altLabel: "Sign in",
-  },
-} as const;
+const FIELD_ERROR_KEYS: Record<ValidationCode, TranslationKey> = {
+  emailRequired: "auth.fieldErrors.emailRequired",
+  emailInvalid: "auth.fieldErrors.emailInvalid",
+  passwordRequired: "auth.fieldErrors.passwordRequired",
+  passwordTooShort: "auth.fieldErrors.passwordTooShort",
+  passwordTooLong: "auth.fieldErrors.passwordTooLong",
+};
 
-function formError(failure: AuthFailure): string | null {
-  switch (failure.kind) {
-    case "invalid_credentials":
-    case "conflict":
-    case "rate_limited":
-    case "unreachable":
-    case "unexpected":
-      return failure.message;
-    case "validation":
-      return failure.message;
-    default:
-      return "Something went wrong. Please try again.";
-  }
+const FORM_ERROR_KEYS: Record<AuthFailure["kind"], TranslationKey> = {
+  invalid_credentials: "auth.formErrors.invalidCredentials",
+  conflict: "auth.formErrors.conflict",
+  rate_limited: "auth.formErrors.rateLimited",
+  unreachable: "auth.formErrors.unreachable",
+  validation: "auth.formErrors.validation",
+  unauthenticated: "auth.formErrors.unexpected",
+  unexpected: "auth.formErrors.unexpected",
+};
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
 }
 
 export function AuthForm({ mode, onSubmit, onSuccess }: AuthFormProps) {
-  const copy = COPY[mode];
+  const { t } = useTranslation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [fieldErrors, setFieldErrors] = useState<CredentialErrors>({});
+  const [showPassword, setShowPassword] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
   const [formMessage, setFormMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [succeeded, setSucceeded] = useState(false);
+
+  const copy =
+    mode === "login"
+      ? {
+          title: t("auth.loginTitle"),
+          subtitle: t("auth.loginSubtitle"),
+          submit: t("auth.loginSubmit"),
+          alt: t("auth.loginAlt"),
+          altHref: "/register",
+          altLabel: t("auth.loginAltLabel"),
+        }
+      : {
+          title: t("auth.registerTitle"),
+          subtitle: t("auth.registerSubtitle"),
+          submit: t("auth.registerSubmit"),
+          alt: t("auth.registerAlt"),
+          altHref: "/login",
+          altLabel: t("auth.registerAltLabel"),
+        };
+
+  function translateCode(code: ValidationCode | undefined): string | undefined {
+    if (!code) return undefined;
+    return t(FIELD_ERROR_KEYS[code], {
+      min: PASSWORD_MIN_LENGTH,
+      max: PASSWORD_MAX_LENGTH,
+    });
+  }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setFormMessage(null);
 
-    const errors =
+    const raw =
       mode === "register"
         ? validateRegistration(email, password)
         : validateLogin(email, password);
+    const errors = {
+      email: translateCode(raw.email),
+      password: translateCode(raw.password),
+    };
     setFieldErrors(errors);
     if (errors.email || errors.password) return;
 
     setSubmitting(true);
     const result = await onSubmit(email.trim(), password);
-    setSubmitting(false);
 
     if (result.ok) {
-      onSuccess(result.data);
+      // Brief, honest confirmation - the parent navigates immediately; this just
+      // avoids a bare flash between submit and route change.
+      setSucceeded(true);
+      const finish = () => onSuccess(result.data);
+      if (prefersReducedMotion()) finish();
+      else window.setTimeout(finish, 260);
       return;
     }
+
+    setSubmitting(false);
     if (result.error.kind === "validation") {
-      setFieldErrors(result.error.fields);
+      setFieldErrors({
+        email: result.error.fields.email,
+        password: result.error.fields.password,
+      });
     }
-    setFormMessage(formError(result.error));
+    setFormMessage(t(FORM_ERROR_KEYS[result.error.kind]));
   }
 
+  const busy = submitting || succeeded;
+
   return (
-    <form
-      onSubmit={handleSubmit}
-      noValidate
-      className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-    >
-      <h1 className="text-xl font-semibold">{copy.title}</h1>
+    <div>
+      <div className="mb-6">
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">{copy.title}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{copy.subtitle}</p>
+      </div>
 
-      {formMessage ? (
-        <p role="alert" className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-          {formMessage}
-        </p>
-      ) : null}
+      <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
+        {formMessage ? <Alert tone="danger">{formMessage}</Alert> : null}
 
-      <div className="mt-5 flex flex-col gap-1">
-        <label htmlFor="email" className="text-sm font-medium">
-          Email
-        </label>
-        <input
-          id="email"
+        <Input
+          label={t("auth.email")}
           name="email"
           type="email"
           autoComplete="email"
+          inputMode="email"
+          autoCapitalize="none"
+          spellCheck={false}
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          aria-invalid={Boolean(fieldErrors.email)}
-          aria-describedby={fieldErrors.email ? "email-error" : undefined}
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 dark:border-slate-700 dark:bg-slate-950"
+          error={fieldErrors.email}
+          disabled={busy}
         />
-        {fieldErrors.email ? (
-          <p id="email-error" className="text-xs text-red-600">
-            {fieldErrors.email}
-          </p>
-        ) : null}
-      </div>
 
-      <div className="mt-4 flex flex-col gap-1">
-        <label htmlFor="password" className="text-sm font-medium">
-          Password
-        </label>
-        <input
-          id="password"
+        <Input
+          label={t("auth.password")}
           name="password"
-          type="password"
+          type={showPassword ? "text" : "password"}
           autoComplete={mode === "login" ? "current-password" : "new-password"}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          aria-invalid={Boolean(fieldErrors.password)}
-          aria-describedby={fieldErrors.password ? "password-error" : "password-hint"}
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 dark:border-slate-700 dark:bg-slate-950"
+          error={fieldErrors.password}
+          disabled={busy}
+          hint={
+            mode === "register"
+              ? t("auth.passwordHint", { min: PASSWORD_MIN_LENGTH })
+              : undefined
+          }
+          trailing={
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              aria-pressed={showPassword}
+              aria-label={showPassword ? t("a11y.hidePassword") : t("a11y.showPassword")}
+              title={showPassword ? t("a11y.hidePassword") : t("a11y.showPassword")}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              {showPassword ? <EyeOffIcon /> : <EyeIcon />}
+            </button>
+          }
         />
-        {fieldErrors.password ? (
-          <p id="password-error" className="text-xs text-red-600">
-            {fieldErrors.password}
-          </p>
-        ) : mode === "register" ? (
-          <p id="password-hint" className="text-xs text-slate-400">
-            At least {PASSWORD_MIN_LENGTH} characters. Passphrases welcome.
-          </p>
-        ) : null}
-      </div>
 
-      <button
-        type="submit"
-        disabled={submitting}
-        className="mt-6 w-full rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
-      >
-        {submitting ? "Please wait…" : copy.submit}
-      </button>
+        <Button
+          type="submit"
+          fullWidth
+          loading={submitting}
+          disabled={busy}
+          className="mt-1"
+        >
+          {succeeded ? (
+            <>
+              <CheckIcon />
+              {t("auth.redirecting")}
+            </>
+          ) : submitting ? (
+            t("common.pleaseWait")
+          ) : (
+            copy.submit
+          )}
+        </Button>
+      </form>
 
-      <p className="mt-4 text-center text-xs text-slate-500 dark:text-slate-400">
+      <p className="mt-5 text-center text-sm text-muted-foreground">
         {copy.alt}{" "}
-        <Link href={copy.altHref} className="font-medium underline">
+        <Link
+          href={copy.altHref}
+          className="font-medium text-primary underline-offset-4 hover:underline"
+        >
           {copy.altLabel}
         </Link>
       </p>
-    </form>
+    </div>
   );
 }

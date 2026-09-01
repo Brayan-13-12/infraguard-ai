@@ -46,6 +46,7 @@ bridges the two tiers. Full detail (with Mermaid diagrams) is in
 | Layer | Technology |
 | --- | --- |
 | Frontend | Next.js 15 (App Router), React 19, TypeScript (strict), Tailwind CSS 3, pnpm |
+| Theming | `next-themes` (light / dark / system, persisted, no-flash); semantic CSS-variable tokens; internal Tailwind component set |
 | Frontend tests | Vitest + Testing Library; ESLint 9 flat config |
 | Backend | Python 3.13, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, pytest, ruff |
 | Auth | Argon2id (`argon2-cffi`), JWT HS256 (`pyjwt`), HttpOnly cookie |
@@ -58,9 +59,9 @@ bridges the two tiers. Full detail (with Mermaid diagrams) is in
 
 ```
 infraguard-ai/
-├── frontend/           Next.js app
-│   └── src/            app/{login,register,dashboard,healthz} · components (AuthProvider,
-│                       AuthForm, RequireAuth) · services/{auth,health} · lib · types
+├── frontend/           Next.js app  (see frontend/README.md for the UI foundation)
+│   └── src/            app/{login,register,dashboard,healthz} · components/{ui,theme,shell,auth,
+│                       dashboard} · services/{auth,health} · lib · types
 ├── backend/            FastAPI app
 │   ├── app/            api/{deps,errors,v1/routes} · core/{config,security,ratelimit}
 │   │                   · db · models/user · schemas · services
@@ -246,7 +247,8 @@ builds the Compose stack and smoke-tests liveness, readiness and the frontend.
   handler returns only `{type, loc, msg}` (Pydantic's raw `input`/`ctx` stripped).
 - **Tokens:** short-lived HS256 JWT in an **HttpOnly, SameSite=Lax, Secure-in-prod
   cookie** - not in `localStorage`, not readable by JS. No secret reaches the
-  frontend.
+  frontend. The **only** value the frontend persists client-side is the theme
+  preference (`localStorage` key `theme`) - non-sensitive by design.
 - **CSRF:** SameSite=Lax + strict `Origin`/`Referer` check on state-changing
   methods + credentialed-but-non-wildcard CORS.
 - **Caching:** all `/api/v1/auth/*` responses are `Cache-Control: no-store`.
@@ -296,6 +298,29 @@ Revocation is a documented next step.
 - Frontend `/login` `/register` `/dashboard` with a client-side route guard and
   an `AuthProvider` context
 - Backend unit + integration test split; CI runs both + a Docker auth smoke test
+
+**v0.3 - UI Foundation, Theming & i18n**
+
+- Light / dark theme (`next-themes`, persisted, no-flash) exposed as a single
+  contextual sun/moon toggle - "system" is still the first-visit default
+  internally but is never shown in the UI
+- Lightweight custom internationalisation (`src/i18n/`, no dependency):
+  **Spanish default** + English, `LanguageProvider` / `useTranslation()`,
+  persisted `ES | EN` switcher. Descriptive copy translates; product/module
+  proper nouns (`InfraGuard AI`, the sidebar nav labels, the `Dashboard`
+  heading, `Coming soon`) stay English in every locale
+- Semantic CSS-variable design tokens + a small internal Tailwind component set
+  (Button, Input, Card, Badge, Alert, PageHeader, Spinner, EmptyState, Reveal)
+- Single self-contained centered authentication card (brand + language + theme
+  live inside the card - nothing floats in the corners) on a restrained backdrop
+- Authenticated app shell: desktop sidebar carries navigation **plus** language,
+  theme, the signed-in identity and a confirmation-gated sign-out; the topbar is
+  mobile-only; the same controls live in the mobile drawer. Assets / Incidents /
+  AI Assistant / Settings shown as disabled "Coming soon"
+- Dashboard (account summary, platform modules, system health) with a reusable
+  entrance-motion system - no invented domain data
+- Responsive 360-1440px, `prefers-reduced-motion` respected, keyboard-accessible
+  navigation, language and theme controls
 
 ### Planned (future phases)
 

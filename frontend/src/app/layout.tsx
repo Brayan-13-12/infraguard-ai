@@ -1,21 +1,38 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 
 import { AuthProvider } from "@/components/AuthProvider";
+import { ThemeProvider } from "@/components/theme/ThemeProvider";
+import { LanguageProvider } from "@/i18n";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "InfraGuard AI",
+  title: {
+    default: "InfraGuard AI",
+    template: "%s · InfraGuard AI",
+  },
   description:
-    "AI-powered infrastructure intelligence and incident management platform.",
+    "Infrastructure intelligence and incident management for modern technology teams.",
+  applicationName: "InfraGuard AI",
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f4f6f9" },
+    { media: "(prefers-color-scheme: dark)", color: "#0f1420" },
+  ],
 };
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
-        <AuthProvider>{children}</AuthProvider>
+    <html lang="es" suppressHydrationWarning>
+      <body className="min-h-screen bg-background font-sans text-foreground antialiased">
+        <ThemeProvider>
+          <LanguageProvider>
+            <AuthProvider>{children}</AuthProvider>
+          </LanguageProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

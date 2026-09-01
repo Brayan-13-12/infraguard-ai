@@ -58,7 +58,7 @@ describe("AuthProvider", () => {
   it("surfaces a message when the backend is unreachable", async () => {
     vi.spyOn(authService, "fetchMe").mockResolvedValue({
       ok: false,
-      error: { kind: "unreachable", message: "Could not reach the server." },
+      error: { kind: "unreachable", message: "x" },
     });
     function ErrProbe() {
       const { error } = useAuth();
@@ -69,7 +69,9 @@ describe("AuthProvider", () => {
         <ErrProbe />
       </AuthProvider>,
     );
-    await waitFor(() => expect(screen.getByTestId("err")).toHaveTextContent(/reach the server/));
+    await waitFor(() =>
+      expect(screen.getByTestId("err")).toHaveTextContent(/conectar con el servidor/i),
+    );
   });
 
   it("login transitions to authenticated", async () => {
@@ -102,7 +104,7 @@ describe("AuthProvider", () => {
     vi.spyOn(authService, "fetchMe").mockResolvedValue({ ok: true, data: USER });
     vi.spyOn(authService, "logout").mockResolvedValue({
       ok: false,
-      error: { kind: "unexpected", message: "Sign out failed. You are still signed in - please try again." },
+      error: { kind: "unexpected", message: "x" },
     });
     renderProbe();
     await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("authenticated"));
@@ -111,7 +113,7 @@ describe("AuthProvider", () => {
 
     // Still authenticated, user retained, and a message surfaced.
     await waitFor(() =>
-      expect(screen.getByTestId("error")).toHaveTextContent(/still signed in/i),
+      expect(screen.getByTestId("error")).toHaveTextContent(/algo salió mal/i),
     );
     expect(screen.getByTestId("status")).toHaveTextContent("authenticated");
     expect(screen.getByTestId("email")).toHaveTextContent("user@example.com");
@@ -121,7 +123,7 @@ describe("AuthProvider", () => {
     vi.spyOn(authService, "fetchMe").mockResolvedValue({ ok: true, data: USER });
     vi.spyOn(authService, "logout").mockResolvedValue({
       ok: false,
-      error: { kind: "unreachable", message: "Could not reach the server." },
+      error: { kind: "unreachable", message: "x" },
     });
     renderProbe();
     await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("authenticated"));
@@ -129,7 +131,7 @@ describe("AuthProvider", () => {
     await userEvent.click(screen.getByRole("button", { name: "logout" }));
 
     await waitFor(() =>
-      expect(screen.getByTestId("error")).toHaveTextContent(/reach the server/i),
+      expect(screen.getByTestId("error")).toHaveTextContent(/conectar con el servidor/i),
     );
     expect(screen.getByTestId("status")).toHaveTextContent("authenticated");
   });

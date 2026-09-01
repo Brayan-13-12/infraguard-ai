@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
 import { useAuth } from "@/components/AuthProvider";
+import { Spinner } from "@/components/ui/Spinner";
+import { useTranslation } from "@/i18n";
 
 /**
  * Client-side route guard. The API is the source of truth for authentication;
@@ -15,6 +17,7 @@ import { useAuth } from "@/components/AuthProvider";
  */
 export function RequireAuth({ children }: { children: React.ReactNode }) {
   const { status, error } = useAuth();
+  const { t } = useTranslation();
   const router = useRouter();
 
   useEffect(() => {
@@ -26,14 +29,12 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   if (status === "authenticated") return <>{children}</>;
 
   return (
-    <div
-      role="status"
-      className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center gap-2 px-6 text-center"
-    >
-      <p className="text-sm text-slate-500 dark:text-slate-400">
-        {status === "loading" ? "Checking your session…" : "Redirecting to sign in…"}
+    <div className="flex min-h-screen flex-col items-center justify-center gap-3 px-6 text-center">
+      <Spinner decorative />
+      <p className="text-sm text-muted-foreground">
+        {status === "loading" ? t("guard.checkingSession") : t("guard.redirecting")}
       </p>
-      {error ? <p className="text-xs text-amber-600">{error}</p> : null}
+      {error ? <p className="text-xs text-warning">{error}</p> : null}
     </div>
   );
 }
