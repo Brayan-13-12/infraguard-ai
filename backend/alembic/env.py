@@ -12,11 +12,9 @@ from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 from app.core.config import settings
-from app.db.base import Base
 
-# Import model modules here so `Base.metadata` is fully populated for
-# autogenerate. (No domain models exist yet in v0.1.)
-# from app import models  # noqa: F401
+# Importing the registry populates Base.metadata with every ORM model.
+from app.db.registry import Base
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.sqlalchemy_database_uri)

@@ -1,10 +1,11 @@
 name: CI
 
-# Bootstrap validation for InfraGuard AI v0.1: lint + tests for both apps, and a
-# Docker Compose build + smoke test of the documented delivery path.
+# Validation for InfraGuard AI: lint + unit/integration tests for both apps, and
+# a Docker Compose build + migration + smoke test (health and authentication) of
+# the documented delivery path.
 #
-# Out of scope for v0.1 (dedicated later phases): image publishing, deployment,
-# Kubernetes, security scanning, release automation.
+# Out of scope (dedicated later phases): image publishing, deployment, Kubernetes,
+# security scanning, release automation.
 
 on:
   push:
@@ -21,11 +22,25 @@ concurrency:
 
 jobs:
   backend:
-    name: Backend (lint + tests)
+    name: Backend (lint + unit + integration tests)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:17.2-alpine
+        env:
+          POSTGRES_DB: infraguard_test
+          POSTGRES_USER: infraguard
+          POSTGRES_PASSWORD: ci_test_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U infraguard -d infraguard_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://infraguard:ci_test_only@localhost:5432/infraguard_test
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,8 +55,8 @@ jobs:
           pip install --no-deps -e .
       - name: Ruff
         run: ruff check .
-      - name: Pytest
-        run: pytest
+      - name: Unit + integration tests
+        run: pytest -m ""
 
   frontend:
     name: Frontend (lint + typecheck + tests + build)
@@ -76,7 +91,7 @@ jobs:
           NEXT_PUBLIC_API_URL: http://localhost:8000
 
   docker-smoke:
-    name: Docker Compose (build + smoke test)
+    name: Docker Compose (build + migrate + auth smoke test)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -93,13 +108,14 @@ jobs:
 
       - name: Wait for backend liveness
         run: |
-          for i in $(seq 1 30); do
-            if curl -fsS http://localhost:8000/api/v1/health/live >/dev/null; then
-              echo "backend is live"; exit 0
-            fi
+          for _ in $(seq 1 30); do
+            curl -fsS http://localhost:8000/api/v1/health/live >/dev/null && exit 0
             sleep 2
           done
           echo "backend did not become live"; exit 1
+
+      - name: Apply database migrations
+        run: docker compose run --rm migrate
 
       - name: Verify backend readiness (expect 200)
         run: |
@@ -107,15 +123,49 @@ jobs:
           cat /tmp/ready.json; echo
           test "$code" = "200"
 
-      - name: Verify frontend liveness (expect exactly 200)
+      - name: Authentication smoke test
         run: |
-          for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/healthz || true)
-            if [ "$code" = "200" ]; then echo "frontend healthz 200"; break; fi
+          set -euo pipefail
+          BASE=http://localhost:8000/api/v1/auth
+          ORIGIN='Origin: http://localhost:3000'
+          CT='Content-Type: application/json'
+          JAR=/tmp/cookies.txt
+          EMAIL="ci-$(date +%s)@example.com"
+          BODY="{\"email\":\"$EMAIL\",\"password\":\"a-ci-only-passphrase\"}"
+
+          echo "register -> 201"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "$BODY" "$BASE/register")" = "201"
+
+          echo "duplicate register -> 409"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "$BODY" "$BASE/register")" = "409"
+
+          echo "login -> 200 + cookie"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -H "$ORIGIN" -H "$CT" -d "$BODY" "$BASE/login")" = "200"
+          grep -q infraguard_access "$JAR"
+
+          echo "me (authenticated) -> 200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/me")" = "200"
+
+          echo "bad login -> 401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "{\"email\":\"$EMAIL\",\"password\":\"wrong\"}" "$BASE/login")" = "401"
+
+          echo "cross-origin login -> 403"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.example' -H "$CT" -d "$BODY" "$BASE/login")" = "403"
+
+          echo "logout -> 200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -c "$JAR" -H "$ORIGIN" -X POST "$BASE/logout")" = "200"
+
+          echo "me after logout -> 401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$BASE/me")" = "401"
+
+      - name: Verify frontend (expect exactly 200)
+        run: |
+          for _ in $(seq 1 30); do
+            [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/healthz || true)" = "200" ] && break
             sleep 2
           done
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/healthz)" = "200"
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/login)" = "200"
 
       - name: Dump logs on failure
         if: failure()

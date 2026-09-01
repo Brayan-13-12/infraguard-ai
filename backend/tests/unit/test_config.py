@@ -12,6 +12,7 @@ from app.core.config import ConfigurationError, Settings
 
 _SECURE_PW = "S3cure-Prod-Passw0rd!"
 _SECURE_URL = f"postgresql+psycopg://appuser:{_SECURE_PW}@db.internal:5432/infraguard"
+_SECURE_JWT = "x7Qw9Zt2Lp4Rm8Vc1Nb6Yh3Kj5Fd0Ss-really-random"
 
 
 def _settings(**overrides: object) -> Settings:
@@ -23,10 +24,14 @@ def _prod(**overrides: object) -> Settings:
         "ENVIRONMENT": "production",
         "DATABASE_URL": _SECURE_URL,
         "BACKEND_CORS_ORIGINS": "https://app.example.com",
+        "JWT_SECRET": _SECURE_JWT,
+        "AUTH_COOKIE_SECURE": True,
     }
     base.update(overrides)
     return _settings(**base)
 
+
+# --- Database credentials -----------------------------------------------
 
 def test_development_allows_placeholder_credentials() -> None:
     s = _settings(
@@ -65,17 +70,55 @@ def test_production_rejects_wildcard_cors() -> None:
         _prod(BACKEND_CORS_ORIGINS="*")
 
 
+# --- JWT secret --------------------------------------------------------
+
+def test_development_allows_placeholder_jwt_secret() -> None:
+    s = _settings(ENVIRONMENT="development")
+    assert s.JWT_SECRET  # default placeholder is fine outside production
+
+
+def test_production_rejects_placeholder_jwt_secret() -> None:
+    with pytest.raises(ConfigurationError, match="JWT_SECRET"):
+        _prod(JWT_SECRET="dev-insecure-jwt-secret-change-me")
+
+
+def test_production_rejects_short_jwt_secret() -> None:
+    with pytest.raises(ConfigurationError, match="JWT_SECRET must be at least"):
+        _prod(JWT_SECRET="tooshort")
+
+
+def test_production_rejects_insecure_cookie() -> None:
+    with pytest.raises(ConfigurationError, match="AUTH_COOKIE_SECURE"):
+        _prod(AUTH_COOKIE_SECURE=False)
+
+
 def test_production_accepts_secure_configuration() -> None:
     s = _prod()
     assert s.ENVIRONMENT == "production"
     assert s.sqlalchemy_database_uri == _SECURE_URL
+    assert s.auth_cookie_secure is True
 
+
+# --- Misc bounds ------------------------------------------------------
 
 def test_timeout_must_be_positive_and_bounded() -> None:
     with pytest.raises(ValueError):
         _settings(DB_HEALTHCHECK_TIMEOUT=0)
     with pytest.raises(ValueError):
         _settings(DB_HEALTHCHECK_TIMEOUT=120)
+
+
+def test_jwt_expiry_must_be_bounded() -> None:
+    with pytest.raises(ValueError):
+        _settings(JWT_ACCESS_TOKEN_EXPIRE_MINUTES=0)
+    with pytest.raises(ValueError):
+        _settings(JWT_ACCESS_TOKEN_EXPIRE_MINUTES=5000)
+
+
+def test_cookie_secure_defaults_follow_environment() -> None:
+    assert _settings(ENVIRONMENT="development").auth_cookie_secure is False
+    # production default requires a full secure config, so check via _prod()
+    assert _prod(AUTH_COOKIE_SECURE=None).auth_cookie_secure is True
 
 
 def test_cors_accepts_comma_separated_string() -> None:

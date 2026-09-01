@@ -1,5 +1,9 @@
 """ORM models package.
 
-Intentionally empty in v0.1 - the InfraGuard domain model (assets, services,
-incidents, dependencies, ...) is introduced in later phases.
+v0.2 introduces the first persistent entity: ``User``. The wider InfraGuard
+domain (assets, services, dependencies, incidents) remains a later phase.
 """
+
+from app.models.user import User
+
+__all__ = ["User"]

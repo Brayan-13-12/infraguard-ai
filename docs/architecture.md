@@ -1,8 +1,11 @@
-# InfraGuard AI - Architecture (v0.1)
+# InfraGuard AI - Architecture
 
-> This document describes the **Project Bootstrap** (v0.1). It states what exists
-> now and what is deliberately deferred. It is updated as phases land.
-> **v0.1 is not production-ready.**
+> Updated as phases land. **Not production-ready.**
+>
+> * **v0.1 - Project Bootstrap:** monorepo, health probes, segmented + hardened
+>   Docker, dependency locking, CI. (Sections 1-11.)
+> * **v0.2 - Authentication & Identity:** the `User` entity, register / login /
+>   logout / `me`, Argon2id, JWT-in-HttpOnly-cookie. (Section 12.)
 
 ## 1. Project purpose
 
@@ -96,6 +99,10 @@ backend/app/
 | `GET` | `/api/v1/health/live` | Liveness - process is up. No DB access. | `200` |
 | `GET` | `/api/v1/health/ready` | Readiness - live `SELECT 1`. | `200` / `503` |
 | `GET` | `/api/v1/health` | Summarized status (`healthy`/`degraded`). Compatibility alias. | `200` / `503` |
+| `POST` | `/api/v1/auth/register` | Create an account (v0.2). | `201` / `409` / `422` / `429` |
+| `POST` | `/api/v1/auth/login` | Authenticate; sets the HttpOnly cookie (v0.2). | `200` / `401` / `429` |
+| `POST` | `/api/v1/auth/logout` | Clear the auth cookie (v0.2). | `200` |
+| `GET` | `/api/v1/auth/me` | Authenticated user's public profile (v0.2). | `200` / `401` / `403` |
 | `GET` | `/docs`, `/openapi.json` | Swagger UI / OpenAPI schema | `200` |
 | `GET` | `/` | Minimal service metadata | `200` |
 
@@ -137,12 +144,11 @@ Development and test environments keep the convenient placeholder defaults.
 
 ## 5. PostgreSQL role
 
-PostgreSQL is the platform's relational store. In v0.1 it runs **only** as a
-Docker container (never installed on the host), on an **internal** network with
-no host port and no outbound internet route. The backend uses a bounded
-connection pool (`pool_pre_ping=True`, connect timeout). The schema is
-intentionally empty - **no domain tables are created** in v0.1. Alembic is wired
-and ready for the first real migration.
+PostgreSQL is the platform's relational store. It runs **only** as a Docker
+container (never installed on the host), on an **internal** network with no host
+port and no outbound internet route. The backend uses a bounded connection pool
+(`pool_pre_ping=True`, connect timeout). As of **v0.2** the schema contains one
+table, `users`, created by the first Alembic migration (see 12.2).
 
 ### Migrations
 
@@ -266,16 +272,23 @@ Health-check flow for the dashboard rows:
 
 | Concern | Handling in v0.1 |
 | --- | --- |
-| Secrets | Never hardcoded. `.env` git-ignored; only `.env.example` (placeholders) tracked. No secret baked into any image. PowerShell/OS artifacts git-ignored. |
-| Production config | Fail-fast: placeholder/short DB passwords, default DB user, and wildcard CORS are rejected when `ENVIRONMENT=production`. |
-| CORS | Restricted to the configured local frontend origin. No wildcard. Credentials disabled. |
+| Secrets | Never hardcoded. `.env` git-ignored; only `.env.example` (placeholders) tracked. No secret baked into any image. `JWT_SECRET` never a `NEXT_PUBLIC_*`. PowerShell/OS artifacts git-ignored. |
+| Production config | Fail-fast: placeholder/short DB password, default DB user, wildcard CORS, **placeholder/short `JWT_SECRET`**, **insecure auth cookie** are rejected when `ENVIRONMENT=production`. |
+| Passwords | Argon2id; never stored in clear, logged, or returned. Generic **login** failure + timing equalisation. **Validation 422s never reflect the submitted value** (`input`/`ctx` stripped). |
+| Tokens | Short-lived HS256 JWT in an HttpOnly / SameSite=Lax / Secure-in-prod cookie. No revocation yet (documented). |
+| CSRF | SameSite=Lax + `Origin`/`Referer` allowlist on unsafe methods + JSON-preflight + non-wildcard CORS. |
+| Caching | Every `/api/v1/auth/*` response (success + error) is `Cache-Control: no-store`, `Pragma: no-cache`. |
+| Logout | Client drops session state only on a confirmed `200` - never on network/server failure. |
+| Enumeration | `register` returns an explicit `409` for a known email - **accepted v0.2 tradeoff** (see 12.14). `login` stays generic. |
+| Rate limiting | Best-effort in-process limiter on `login` / `register` (per-IP). Production needs a shared store. |
+| CORS | Restricted to the configured frontend origin. No wildcard. **Credentials enabled** (required for the cookie; safe only with an explicit origin list). |
 | Network | Segmented `edge` / `data` (internal) networks; frontend cannot reach the DB; DB has no outbound route. |
 | DB exposure | No host port for PostgreSQL. App ports bound to `127.0.0.1`. |
 | Error leakage | Health/readiness return generic states; details logged server-side only. `redoc` disabled. |
 | Containers | Digest-pinned official base images, slim/alpine, non-root, `no-new-privileges`, `cap_drop: ALL`, read-only root FS (apps), `.dockerignore`, no `.env` copied in. |
 | Dependencies | Backend: hash-pinned locks + pinned build tooling, installed offline in Docker. Frontend: `pnpm-lock.yaml`. |
 | CI | Minimal `contents: read` token; actions pinned to commit SHAs; builds and smoke-tests the stack. |
-| Auth / rate limiting | **Intentionally not implemented yet** - later phases. |
+| Authorization (RBAC) | **Not implemented yet** - a dedicated later phase. v0.2 is authentication only. |
 
 ## 10. Dependency & image reproducibility
 
@@ -305,23 +318,200 @@ Health-check flow for the dashboard rows:
 Token permissions are `contents: read`. Out of scope for v0.1: image publishing,
 deployment, Kubernetes, security scanning, release automation.
 
-## 12. Future direction (NOT in v0.1)
+## 12. Authentication & Identity (v0.2)
+
+### 12.1 Scope
+
+Email + password authentication and the first persistent entity, `User`.
+**In scope:** register, login, logout, `GET /auth/me`, a reusable auth
+dependency, a client-guarded `/dashboard`. **Out of scope (later phases):**
+RBAC / roles / permissions, OAuth, MFA, refresh-token rotation, server-side JWT
+revocation, password reset, email verification.
+
+### 12.2 `User` model & migration
+
+`app/models/user.py`:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `UUID` PK | DB default `gen_random_uuid()`; Python default `uuid4` |
+| `email` | `varchar(320)` | `UNIQUE` (`uq_users_email`, index-backed); CHECK `= lower(email)` and non-empty |
+| `password_hash` | `varchar(255)` | Argon2id; CHECK non-empty |
+| `is_active` | `boolean` | default `true` |
+| `created_at` / `updated_at` | `timestamptz` | server default `now()`; `updated_at` `onupdate` |
+
+`Base.metadata` carries a naming convention so constraint names are deterministic
+in migrations. The first migration `02c49f7b5787_create_users_table` was
+generated from the model, hand-reviewed, and validated on the Docker PostgreSQL
+(`upgrade → downgrade -1 → upgrade`). Lifecycle: **model → Alembic → PostgreSQL**;
+`docker compose run --rm migrate` applies it (one-shot, never on `up`).
+
+### 12.3 Password hashing
+
+Argon2id via `argon2-cffi` with the library's recommended default parameters -
+no hand-picked cryptographic settings. `check_needs_rehash` upgrades stored
+hashes on the next successful login. Policy: **12-128 chars**, blank rejected,
+never truncated. A dummy Argon2 verify runs when the email is unknown, so login
+timing doesn't reveal whether an account exists.
+
+### 12.4 JWT access tokens
+
+HS256, secret from `JWT_SECRET` (config; `>= 32` chars and non-placeholder
+enforced in production). Claims: `sub`, `iat`, `nbf`, `exp`, `jti`, `iss`,
+`type=access` - no email or password material. Lifetime
+`JWT_ACCESS_TOKEN_EXPIRE_MINUTES` (default 15). Decoding validates signature,
+issuer, expiry, required claims and token type; `alg=none`, tampered, expired
+and malformed tokens are rejected.
+
+### 12.5 Token storage - decision
+
+| Option | XSS exposure | CSRF exposure | Chosen |
+| --- | --- | --- | --- |
+| `localStorage` | **High** - any injected script can exfiltrate the token | None | ✗ |
+| **HttpOnly cookie** | Low - script cannot read it | Needs mitigation | **✓** |
+
+The token is set as `Set-Cookie: infraguard_access=<jwt>; HttpOnly; SameSite=Lax;
+Path=/; Max-Age=<ttl>` (+ `Secure` in production). It is **never** in the
+response body and **never** readable by JavaScript. The backend also accepts
+`Authorization: Bearer` for non-browser clients and tests.
+
+- **XSS:** an injected script still cannot steal the token. It could still call
+  the API *as* the user while the page is open - so this is mitigation, not
+  immunity; standard output-encoding / CSP hygiene still matters.
+- **CSRF:** `SameSite=Lax` stops the cookie riding cross-site non-GET requests;
+  a strict `Origin`/`Referer` allowlist check on `POST/PUT/PATCH/DELETE`
+  (`require_trusted_origin`) is defense in depth; the JSON content-type also
+  forces a CORS preflight that the restrictive policy fails for foreign origins.
+  Requests with no `Origin`/`Referer` (non-browser) are allowed.
+- **Production cookie:** `Secure` (HTTPS only), `SameSite=Lax` (or `Strict` if
+  no cross-site top-level nav is needed), `HttpOnly`, `Path=/`. `SameSite=None`
+  is rejected unless `Secure`.
+
+### 12.6 Auth dependency
+
+```mermaid
+flowchart LR
+    A["Request"] --> B{"cookie or<br/>Bearer token?"}
+    B -- no --> E1["401"]
+    B -- yes --> C["decode + validate JWT"]
+    C -- invalid/expired --> E2["401"]
+    C -- ok --> D["load User by sub"]
+    D -- missing --> E1
+    D -- inactive --> E3["403"]
+    D -- active --> F["return User"]
+```
+
+`get_current_user` (in `app/api/deps.py`) is the single reusable dependency for
+every future protected endpoint (`assets`, `incidents`, …).
+
+### 12.7 Request flow
+
+```mermaid
+sequenceDiagram
+    participant B as Browser (localhost:3000)
+    participant N as Next.js (AuthProvider)
+    participant F as FastAPI (localhost:8000)
+    participant P as PostgreSQL
+
+    N->>F: GET /api/v1/auth/me  (credentials: include)
+    F-->>N: 401  → status "unauthenticated"
+    B->>N: submit /login form
+    N->>F: POST /api/v1/auth/login {email, password}  (Origin checked)
+    F->>P: SELECT user WHERE email=?
+    F->>F: Argon2 verify · issue JWT
+    F-->>N: 200 {user}  + Set-Cookie: infraguard_access (HttpOnly)
+    N->>F: GET /api/v1/auth/me  (cookie auto-sent)
+    F-->>N: 200 {user}  → status "authenticated"
+    B->>N: navigate /dashboard  (RequireAuth renders)
+    B->>N: click "Log out"
+    N->>F: POST /api/v1/auth/logout
+    F-->>N: 200  + Set-Cookie: infraguard_access=; Max-Age=0
+```
+
+### 12.8 Frontend
+
+`AuthProvider` (React context) calls `/auth/me` on mount and exposes
+`{user, status, error, login, register, logout, refresh}`. `RequireAuth` gates
+`/dashboard` **client-side** (the API is the source of truth): it shows a brief
+"Checking your session…" state, then renders children or `router.replace("/login")`.
+Server-side gating would need the frontend and API to be same-origin (a reverse
+proxy) - a deployment concern. All auth `fetch` calls use `credentials: "include"`,
+never throw, and map every failure (`401` / `409` / `422` / `429` / offline /
+malformed) to a typed result the UI renders explicitly.
+
+**Logout is confirmation-gated.** `authService.logout()` returns a structured
+`LogoutResult`; `AuthProvider` drops authenticated state **only** on a confirmed
+`200`. If the request fails (network or non-200), the HttpOnly cookie may still
+be valid, so the session stays `authenticated` and the UI shows *"you are still
+signed in - please try again"*. This avoids a UI that looks logged out while the
+token is live.
+
+### 12.9 Validation error sanitization
+
+Pydantic's default `422` body echoes the submitted value in an `input` field -
+for a password field that is the **plaintext password**. A custom
+`RequestValidationError` handler (`app/api/errors.py`) returns only
+`{type, loc, msg}` per error - `input` and `ctx` are stripped. The frontend's
+per-field messages (`detail[].loc` / `detail[].msg`) still work. Regression
+tests assert sentinel passwords never appear in any response body.
+
+### 12.10 Cache headers
+
+Every response under `/api/v1/auth` (success **and** error) is served
+`Cache-Control: no-store` + `Pragma: no-cache` via a path-scoped middleware, so
+credentials and profile data are never cached by browsers or intermediaries.
+
+### 12.12 CORS
+
+`allow_credentials=True` is now required for the cookie. It is only safe because
+`allow_origins` is an explicit list (never `*` - enforced by config in
+production), `allow_methods` / `allow_headers` are explicit, and credentials are
+never combined with a wildcard. Local dev: `http://localhost:3000` →
+`http://localhost:8000` (same site, different port) works with `SameSite=Lax`.
+
+### 12.13 Rate limiting - decision
+
+A small **in-process fixed-window limiter** (`app/core/ratelimit.py`) guards
+`login` and `register` per client IP. No Redis, no new infrastructure. It is
+honest about its limits: **per-process, lost on restart, not shared across
+replicas**. With one backend replica it still slows brute force from one source.
+**Production** must enforce rate limiting at a shared layer (Redis-backed
+limiter, API gateway, or WAF) - deferred to the security-hardening phase.
+
+### 12.14 Known limitations (v0.2)
+
+- **No JWT revocation.** Logout clears the cookie *and* is confirmation-gated on
+  the client, but an already-issued token stays cryptographically valid until
+  `exp` (≤ 15 min). Next step: a `jti` denylist, or short access + refresh-token
+  rotation.
+- **Duplicate-registration enumeration (accepted tradeoff).** `POST /auth/register`
+  returns an explicit `409 "Email is already registered"`, which lets an attacker
+  learn whether an email has an account. Kept deliberately for portfolio
+  usability - registration is **not** redesigned. Rate limiting blunts bulk
+  enumeration. A production deployment would instead return a generic
+  "check your email" response and confirm/deny out of band.
+- **`JWT_SECRET` is a single static HS256 key.** Rotation / a KMS-managed or
+  asymmetric (RS256/EdDSA) key is a deployment concern.
+- **Rate limiter is per-process** (see 12.13).
+- **Protected routing is client-side** (see 12.8).
+- Password strength is length-only (no breached-password check - deferred).
+
+## 13. Future direction
 
 Later, dedicated feature branches are expected to add:
 
-- **Neo4j** for the infrastructure dependency graph
-- **AI providers** for incident analysis / RAG
-- **Kubernetes** manifests (`infra/k8s/`) and a **Helm** chart (`infra/helm/`),
-  with Secrets / an external secret manager for credentials
-- **CI/CD** pipelines (build, test, security scan, image publish, deploy)
-- **Observability** (metrics, logs, traces)
-- Authentication, authorization, rate limiting
+- Authorization / RBAC; refresh tokens + revocation; password reset; email
+  verification; OAuth; MFA
 - The InfraGuard domain model (assets, services, dependencies, incidents)
+- **Neo4j** dependency graph · **AI providers** for incident analysis / RAG
+- **Kubernetes** + **Helm**, with Secrets / an external secret manager
+- **CI/CD** (security scan, image publish, deploy) · **Observability**
 
 ```mermaid
 graph LR
-    v01["v0.1<br/>Bootstrap"] --> auth["Auth & users"]
-    auth --> domain["Domain model<br/>(assets, incidents)"]
+    v01["v0.1<br/>Bootstrap"] --> v02["v0.2<br/>Auth & users"]
+    v02 --> rbac["Authorization<br/>(RBAC)"]
+    rbac --> domain["Domain model<br/>(assets, incidents)"]
     domain --> graph["Neo4j<br/>dependency graph"]
     domain --> ai["AI incident analysis"]
     domain --> k8s["Kubernetes + Helm"]
@@ -329,4 +519,4 @@ graph LR
     k8s --> obs["Observability"]
 ```
 
-The v0.1 boundary is deliberate: ship a trustworthy foundation first.
+Each boundary is deliberate: ship a trustworthy layer, then build on it.
