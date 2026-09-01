@@ -1,12 +1,13 @@
 # ---------------------------------------------------------------------------
-# InfraGuard AI - v0.1 local environment
+# InfraGuard AI - local environment (v0.2 - Authentication & Identity)
 #
-#   cp .env.example .env      # then adjust values if you wish
-#   docker compose up --build
+#   cp .env.example .env
+#   docker compose up --build -d
+#   docker compose run --rm migrate       # apply DB migrations (creates `users`)
 #
 # Endpoints:
-#   Frontend  -> http://localhost:3000
-#   Backend   -> http://localhost:8000        (Swagger at /docs)
+#   Frontend  -> http://localhost:3000       (/login, /register, /dashboard)
+#   Backend   -> http://localhost:8000       (Swagger at /docs)
 #   Liveness  -> http://localhost:8000/api/v1/health/live
 #   Readiness -> http://localhost:8000/api/v1/health/ready
 #
@@ -17,17 +18,33 @@
 #   - frontend joins ONLY `edge`  -> it cannot reach PostgreSQL
 #   - db       joins ONLY `data`  -> internal, no outbound internet
 #   - backend  joins BOTH         -> the only bridge between tiers
+#   - migrate  joins ONLY `data`  -> one-shot; applies Alembic migrations
 #
 # PostgreSQL publishes no host port. Frontend/backend bind to 127.0.0.1 only.
 # `${VAR:-default}` fallbacks are non-secret local-dev values so the stack also
 # starts without a .env file. Setting ENVIRONMENT=production makes the backend
-# reject these placeholder credentials at startup.
+# reject these placeholder credentials / JWT secret at startup.
 # ---------------------------------------------------------------------------
 
 x-hardening: &hardening
   security_opt:
     - no-new-privileges:true
   restart: unless-stopped
+
+# Shared backend runtime configuration (used by `backend` and the `migrate` job).
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  POSTGRES_DB: ${POSTGRES_DB:-infraguard}
+  POSTGRES_USER: ${POSTGRES_USER:-infraguard}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_for_local_development}
+  POSTGRES_HOST: db
+  POSTGRES_PORT: 5432
+  DATABASE_URL: ${DATABASE_URL:-}
+  BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-http://localhost:3000}
+  # --- Authentication (v0.2) --- local-dev placeholder; rejected in production.
+  JWT_SECRET: ${JWT_SECRET:-dev-insecure-jwt-secret-change-me}
+  JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+  AUTH_COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-lax}
 
 services:
   db:
@@ -61,20 +78,34 @@ services:
     networks:
       - data
 
+  # One-shot: apply Alembic migrations, then exit. Never runs automatically.
+  #   docker compose run --rm migrate
+  migrate:
+    <<: *hardening
+    build:
+      context: ./backend
+    # Not started by `docker compose up`. Run explicitly:
+    #   docker compose run --rm migrate
+    profiles: ["migrate"]
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment: *backend-env
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - data
+
   backend:
     <<: *hardening
     build:
       context: ./backend
-    environment:
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-      POSTGRES_DB: ${POSTGRES_DB:-infraguard}
-      POSTGRES_USER: ${POSTGRES_USER:-infraguard}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_for_local_development}
-      POSTGRES_HOST: db
-      POSTGRES_PORT: 5432
-      # Optional explicit override; empty -> backend assembles from the parts above.
-      DATABASE_URL: ${DATABASE_URL:-}
-      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-http://localhost:3000}
+    environment: *backend-env
     ports:
       - "127.0.0.1:8000:8000"
     read_only: true

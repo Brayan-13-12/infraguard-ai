@@ -46,15 +46,20 @@ _PLACEHOLDER_SECRETS = frozenset(
         "change_me",
         "changeme",
         "change_me_for_local_development",
+        "change_this_in_production",
+        "dev-insecure-jwt-secret-change-me",
         "postgres",
         "password",
         "secret",
         "admin",
         "root",
         "infraguard",
+        "jwt-secret",
+        "your-secret-key",
     }
 )
 _MIN_PROD_PASSWORD_LEN = 12
+_MIN_JWT_SECRET_LEN = 32
 
 
 class ConfigurationError(RuntimeError):
@@ -90,6 +95,29 @@ class Settings(BaseSettings):
 
     # Connectivity-check timeout (seconds) used by the readiness probe.
     DB_HEALTHCHECK_TIMEOUT: float = Field(default=3.0, gt=0, le=30)
+
+    # --- Authentication (v0.2) ---
+    # HS256 signing secret. The default is an obvious placeholder and is rejected
+    # when ENVIRONMENT=production (see _enforce_production_safety).
+    JWT_SECRET: str = "dev-insecure-jwt-secret-change-me"
+    JWT_ALGORITHM: Literal["HS256"] = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=15, gt=0, le=1440)
+    JWT_ISSUER: str = "infraguard-api"
+
+    # Cookie that carries the access token (HttpOnly; never readable by JS).
+    AUTH_COOKIE_NAME: str = "infraguard_access"
+    # `Secure` flag. None -> derived from ENVIRONMENT (secure everywhere except dev).
+    AUTH_COOKIE_SECURE: bool | None = None
+    AUTH_COOKIE_SAMESITE: Literal["lax", "strict", "none"] = "lax"
+
+    # Password policy. Argon2 handles arbitrary length; the max only bounds the
+    # work an attacker can force per request. Passwords are never truncated.
+    PASSWORD_MIN_LENGTH: int = Field(default=12, ge=8, le=64)
+    PASSWORD_MAX_LENGTH: int = Field(default=128, ge=64, le=1024)
+
+    # Best-effort in-process rate limiting for auth endpoints (no external store).
+    AUTH_RATE_LIMIT_MAX_ATTEMPTS: int = Field(default=10, gt=0)
+    AUTH_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60, gt=0)
 
     # --- CORS ---
     # Comma-separated string (from env) or list. Defaults to the local frontend
@@ -139,6 +167,19 @@ class Settings(BaseSettings):
         if not self.BACKEND_CORS_ORIGINS:
             problems.append("BACKEND_CORS_ORIGINS must list at least one explicit origin")
 
+        secret = self.JWT_SECRET.strip()
+        if secret.lower() in _PLACEHOLDER_SECRETS:
+            problems.append("JWT_SECRET is a well-known placeholder/default value")
+        elif len(secret) < _MIN_JWT_SECRET_LEN:
+            problems.append(
+                f"JWT_SECRET must be at least {_MIN_JWT_SECRET_LEN} characters"
+            )
+
+        if self.AUTH_COOKIE_SECURE is False:
+            problems.append("AUTH_COOKIE_SECURE must not be disabled in production")
+        if self.AUTH_COOKIE_SAMESITE == "none" and not self.auth_cookie_secure:
+            problems.append("SameSite=None cookies require Secure=true")
+
         if problems:
             raise ConfigurationError(
                 "Unsafe production configuration: " + "; ".join(problems)
@@ -176,6 +217,19 @@ class Settings(BaseSettings):
     @property
     def debug(self) -> bool:
         return self.ENVIRONMENT == "development"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def auth_cookie_secure(self) -> bool:
+        """Effective Secure flag: explicit override, else on only in production."""
+        if self.AUTH_COOKIE_SECURE is not None:
+            return self.AUTH_COOKIE_SECURE
+        return self.ENVIRONMENT == "production"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def access_token_expires_seconds(self) -> int:
+        return self.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
 
 
 @lru_cache

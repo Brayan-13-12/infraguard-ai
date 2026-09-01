@@ -6,14 +6,16 @@ InfraGuard AI aims to help operations teams understand their infrastructure,
 model service dependencies, manage incidents, and get AI-assisted analysis of
 impact and root cause.
 
-> ## Current status: `v0.1` - Project Bootstrap
+> ## Current status: `v0.2` - Authentication & Identity
 >
-> This repository currently contains **only the foundation**: a monorepo, a
-> running frontend, a running backend with real liveness/readiness probes, a
-> containerised database, dependency locking, container hardening, and CI that
-> builds and smoke-tests the stack. **No domain features** (assets, incidents,
-> dashboards, AI, graphs, auth) are implemented yet - see [Roadmap](#roadmap).
-> This is **not** production-ready.
+> Builds on the v0.1 bootstrap (monorepo, liveness/readiness, segmented +
+> hardened Docker, dependency locking, CI). **v0.2 adds the first persistent
+> entity (`User`)** and email + password authentication: register, log in
+> (Argon2id + short-lived JWT in an HttpOnly cookie), `GET /auth/me`, log out,
+> and a client-guarded `/dashboard`. **No further domain** (assets, incidents,
+> dashboards, AI, graphs) and **no RBAC / OAuth / MFA / refresh tokens / password
+> reset / email verification** - see [Roadmap](#roadmap). This is **not**
+> production-ready.
 
 ---
 
@@ -31,11 +33,12 @@ impact and root cause.
 Browser ──▶ frontend (Next.js) ──[edge net]──▶ backend (FastAPI) ──[data net]──▶ PostgreSQL
 ```
 
-The frontend renders a dashboard and calls the backend **readiness** endpoint.
-The backend performs a live `SELECT 1` against PostgreSQL and reports the result.
-Nothing is hardcoded as healthy. Network segmentation means the frontend
-container **cannot reach PostgreSQL** - only the backend bridges the two tiers.
-Full detail (with Mermaid diagrams) is in
+The frontend renders a dashboard, calls the backend **readiness** endpoint, and
+(v0.2) authenticates against `/api/v1/auth/*`. The access token is an **HS256
+JWT** carried in an **HttpOnly cookie** - never in `localStorage`, never
+readable by JS. Passwords are hashed with **Argon2id**. Network segmentation
+means the frontend container **cannot reach PostgreSQL** - only the backend
+bridges the two tiers. Full detail (with Mermaid diagrams) is in
 [`docs/architecture.md`](docs/architecture.md).
 
 ## Technology stack
@@ -45,22 +48,29 @@ Full detail (with Mermaid diagrams) is in
 | Frontend | Next.js 15 (App Router), React 19, TypeScript (strict), Tailwind CSS 3, pnpm |
 | Frontend tests | Vitest + Testing Library; ESLint 9 flat config |
 | Backend | Python 3.13, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, pytest, ruff |
+| Auth | Argon2id (`argon2-cffi`), JWT HS256 (`pyjwt`), HttpOnly cookie |
 | Backend deps | `pyproject.toml` + hash-pinned `requirements*.txt` (pip-tools) |
-| Database | PostgreSQL 17 (Docker only) |
+| Database | PostgreSQL 17 (Docker only) - `users` table via Alembic |
 | Orchestration | Docker + Docker Compose (segmented networks, hardened containers) |
-| CI | GitHub Actions - lint, tests, Docker build + smoke test (SHA-pinned actions) |
+| CI | GitHub Actions - lint, unit + integration tests, Docker build + migrate + auth smoke test (SHA-pinned actions) |
 
 ## Repository structure
 
 ```
 infraguard-ai/
-├── frontend/           Next.js app (src/app, components, lib, services, types) + vitest tests
-├── backend/            FastAPI app (app/api, core, db, models, schemas, services) + alembic + pytest
+├── frontend/           Next.js app
+│   └── src/            app/{login,register,dashboard,healthz} · components (AuthProvider,
+│                       AuthForm, RequireAuth) · services/{auth,health} · lib · types
+├── backend/            FastAPI app
+│   ├── app/            api/{deps,errors,v1/routes} · core/{config,security,ratelimit}
+│   │                   · db · models/user · schemas · services
+│   ├── alembic/versions/   02c49f7b5787_create_users_table.py
+│   ├── tests/{unit,integration}/
 │   └── requirements*.txt   hash-pinned dependency locks
 ├── infra/              Placeholder for future IaC (Kubernetes, Helm)
 ├── docs/               architecture.md
-├── .github/workflows/  CI: lint + tests + Docker smoke test
-├── docker-compose.yml  Full local stack (segmented networks, hardened)
+├── .github/workflows/  CI: lint + unit/integration tests + Docker migrate + auth smoke test
+├── docker-compose.yml  Full local stack (segmented networks, hardened) + one-shot `migrate`
 ├── .env.example        Environment template (placeholders only)
 ├── .gitignore  ·  LICENSE (MIT)  ·  README.md
 ```
@@ -96,16 +106,19 @@ non-secret fallback defaults, so it starts without a `.env` file.
 | `BACKEND_CORS_ORIGINS` | Allowed CORS origins (local frontend only; no `*` in production) |
 | `DB_HEALTHCHECK_TIMEOUT` | Readiness DB-check timeout in seconds (`0 < t <= 30`) |
 | `NEXT_PUBLIC_API_URL` | Backend base URL as seen by the browser (no secrets) |
+| `JWT_SECRET` | HS256 signing secret (`>= 32` chars in production; never a `NEXT_PUBLIC_*`) |
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | Access-token lifetime (default 15) |
+| `AUTH_COOKIE_SECURE` / `AUTH_COOKIE_SAMESITE` | Auth cookie flags (`Secure` derived from env if unset) |
 
 ### Production configuration safety
 
-With `ENVIRONMENT=production` the backend **refuses to start** if the database
-password is a well-known placeholder/default or shorter than 12 characters, if
-the DB user is a default (when assembling the URL from parts), or if
-`BACKEND_CORS_ORIGINS` contains `*`. It fails fast with a clear server-side
-error that contains no secrets. Production secrets are expected as real
-environment variables; a later deployment phase will source them from Kubernetes
-Secrets / an external secret manager (not part of v0.1).
+With `ENVIRONMENT=production` the backend **refuses to start** (clear server-side
+error, no secrets in the message) if: the database password is a placeholder /
+`< 12` chars, the DB user is a default, `BACKEND_CORS_ORIGINS` contains `*`,
+**`JWT_SECRET` is a placeholder / `< 32` chars**, or **`AUTH_COOKIE_SECURE` is
+disabled**. Production secrets are expected as real environment variables; a
+later deployment phase will source them from Kubernetes Secrets / an external
+secret manager.
 
 ## Docker (recommended)
 
@@ -116,14 +129,19 @@ cp .env.example .env
 docker compose up --build
 ```
 
+```bash
+docker compose run --rm migrate   # apply DB migrations (creates the users table)
+```
+
 | Service | URL |
 | --- | --- |
-| Frontend | http://localhost:3000 |
+| Frontend | http://localhost:3000 · `/login` · `/register` · `/dashboard` |
 | Backend API | http://localhost:8000 |
 | Swagger UI | http://localhost:8000/docs |
 | Backend liveness | http://localhost:8000/api/v1/health/live |
 | Backend readiness | http://localhost:8000/api/v1/health/ready |
 
+The `migrate` service is **one-shot** and never runs on `docker compose up`.
 PostgreSQL publishes **no** host port and lives on an `internal` network with no
 outbound route. Frontend/backend host ports bind to `127.0.0.1` only.
 
@@ -167,22 +185,30 @@ pnpm dev
 | `GET` | `/api/v1/health/live` | Liveness. Always `200` while the process runs. No DB. |
 | `GET` | `/api/v1/health/ready` | Readiness. `200` ready / `503` not ready (live DB check). |
 | `GET` | `/api/v1/health` | Summarized status (`healthy` / `degraded`). Compatibility alias. |
+| `POST` | `/api/v1/auth/register` | `{email, password}` → `201` user · `409` duplicate · `422` policy · `429` |
+| `POST` | `/api/v1/auth/login` | `{email, password}` → `200` user + sets HttpOnly cookie · `401` · `429` |
+| `POST` | `/api/v1/auth/logout` | Clears the auth cookie → `200` |
+| `GET` | `/api/v1/auth/me` | Authenticated user's public profile → `200` · `401` · `403` |
 | `GET` | `/docs` · `/openapi.json` | Swagger UI / OpenAPI schema |
 | `GET` | `/` | Service metadata |
 
 The `503` responses are documented in OpenAPI with the **same** schema as their
-`200` counterparts.
+`200` counterparts. Login failures are **generic** (`Invalid email or password`)
+for wrong password, unknown user and inactive account alike.
 
 ## Testing
 
-**Backend** (no database required - the DB dependency is faked, `ENVIRONMENT=test`):
+**Backend** - unit tests need no database; integration tests use a real one:
 
 ```bash
 cd backend
 pip install --require-hashes --no-deps -r requirements-dev.txt && pip install --no-deps -e .
 ruff check .
-pytest
+pytest                                    # fast unit tests only
+TEST_DATABASE_URL=postgresql+psycopg://u:p@localhost:5432/infraguard_test pytest -m ""
 ```
+
+Integration tests **skip** (not fail) when `TEST_DATABASE_URL` is unset.
 
 **Frontend** (Vitest + Testing Library; behavior-focused, no snapshots):
 
@@ -213,36 +239,68 @@ builds the Compose stack and smoke-tests liveness, readiness and the frontend.
 ## Security notes
 
 - No secrets in the repository; `.env` is git-ignored, `.env.example` holds placeholders.
-- Production rejects placeholder DB credentials and wildcard CORS (fail-fast).
-- CORS restricted to the local frontend origin - no wildcard.
+- Production rejects placeholder DB credentials, wildcard CORS, and placeholder /
+  short `JWT_SECRET` (fail-fast, no secrets in the error).
+- **Passwords:** Argon2id, never stored in clear, never logged, never returned.
+  **Validation errors (`422`) never echo the submitted value** - the custom
+  handler returns only `{type, loc, msg}` (Pydantic's raw `input`/`ctx` stripped).
+- **Tokens:** short-lived HS256 JWT in an **HttpOnly, SameSite=Lax, Secure-in-prod
+  cookie** - not in `localStorage`, not readable by JS. No secret reaches the
+  frontend.
+- **CSRF:** SameSite=Lax + strict `Origin`/`Referer` check on state-changing
+  methods + credentialed-but-non-wildcard CORS.
+- **Caching:** all `/api/v1/auth/*` responses are `Cache-Control: no-store`.
+- **Login:** generic failure message (no user enumeration); a dummy Argon2 verify
+  runs for unknown users to equalise timing. Best-effort per-IP rate limiting on
+  `login` / `register` (in-process; production needs a shared store).
+- **Registration** returns an explicit `409` for a known email - an
+  **accepted v0.2 usability tradeoff** (enumeration). Documented; not redesigned.
+- **Logout** clears the session on the client **only after a confirmed `200`** -
+  a failed request leaves you signed in with a clear message.
 - **Network segmentation:** frontend ⇄ backend on `edge`; backend ⇄ db on
   `data` (internal). The frontend cannot reach PostgreSQL.
 - PostgreSQL has no published host port; app ports bind to `127.0.0.1`.
-- Health/readiness responses never leak stack traces, connection strings or credentials.
-- **Container hardening:** non-root users, `no-new-privileges`, all Linux
-  capabilities dropped (db keeps only the 5 its entrypoint needs), read-only
-  root filesystem for app containers with `tmpfs` for the few writable paths.
-- Dependency locks with hash verification.
-- **Not yet implemented (by design):** authentication, authorization, rate limiting.
+- Errors never leak stack traces, SQL, connection strings or credentials
+  (DB-unavailable → generic `503`).
+- **Container hardening (unchanged):** non-root users, `no-new-privileges`,
+  `cap_drop: ALL`, read-only root FS for app containers + `tmpfs`.
+- **Not implemented (by design):** RBAC / roles, OAuth, MFA, refresh-token
+  rotation, server-side JWT revocation, password reset, email verification.
+
+### Logout semantics
+
+`POST /api/v1/auth/logout` clears the cookie. It does **not** revoke the JWT -
+without a `jti` denylist a stolen token stays valid until it expires (≤ 15 min).
+Revocation is a documented next step.
 
 ## Roadmap
 
-### Implemented now (v0.1)
+### Implemented now
 
-- Monorepo layout with separated concerns
-- Next.js dashboard showing live system health (calls backend readiness)
-- FastAPI backend, versioned API (`/api/v1`), Swagger at `/docs`
+**v0.1 - Bootstrap**
+
+- Monorepo, Next.js health dashboard, FastAPI `/api/v1`, Swagger
 - Liveness / readiness / summary health endpoints; real PostgreSQL check
-- Centralised env-based configuration with production fail-safety
-- SQLAlchemy engine/session + Alembic wired to the same config
-- Hash-pinned backend dependency locks; digest-pinned base images
-- Segmented, hardened Docker Compose stack
-- Backend pytest suite + frontend Vitest suite
-- CI: lint, tests, Docker build + smoke test (SHA-pinned actions, minimal permissions)
+- Centralised env config with production fail-safety
+- Hash-pinned backend deps; digest-pinned images; segmented + hardened Compose
+- Backend pytest + frontend Vitest; SHA-pinned CI
 
-### Planned (future phases, not in v0.1)
+**v0.2 - Authentication & Identity**
 
-- Authentication, authorization, users
+- `User` model (UUID, unique lowercased email, `is_active`, tz-aware timestamps)
+  + first Alembic migration (`users`), validated upgrade/downgrade
+- `register` / `login` / `logout` / `me`; Argon2id hashing; HS256 JWT
+- HttpOnly cookie token storage; SameSite + Origin-check CSRF defense
+- Reusable `get_current_user` dependency for future protected endpoints
+- Best-effort in-process rate limiting on auth endpoints
+- Frontend `/login` `/register` `/dashboard` with a client-side route guard and
+  an `AuthProvider` context
+- Backend unit + integration test split; CI runs both + a Docker auth smoke test
+
+### Planned (future phases)
+
+- Authorization / RBAC / roles; refresh-token rotation; JWT revocation; password
+  reset; email verification; OAuth; MFA
 - Infrastructure asset & service model, dependencies
 - Incident management and impact analysis
 - Infrastructure dependency graph (Neo4j)

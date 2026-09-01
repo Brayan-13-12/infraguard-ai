@@ -18,8 +18,17 @@ os.environ["ENVIRONMENT"] = "test"
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy.exc import OperationalError  # noqa: E402
 
+from app.api.deps import reset_rate_limiters  # noqa: E402
 from app.db.session import get_db  # noqa: E402
 from app.main import app  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _clean_rate_limiters() -> Iterator[None]:
+    """Each test starts with fresh in-process rate-limit counters."""
+    reset_rate_limiters()
+    yield
+    reset_rate_limiters()
 
 
 class FakeSession:

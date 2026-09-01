@@ -1,34 +1,136 @@
 # InfraGuard AI - Backend
 
-FastAPI service for InfraGuard AI. v0.1 exposes health endpoints (liveness /
-readiness / summary) and the wiring (config, DB sessions, Alembic) needed for
-future development.
+FastAPI service for InfraGuard AI.
+
+* **v0.1** - health endpoints (liveness / readiness / summary) + wiring.
+* **v0.2** - authentication & identity: the first persistent entity (`User`),
+  registration / login / logout / `me`, Argon2id password hashing, JWT access
+  tokens delivered as an HttpOnly cookie, the first Alembic migration.
 
 ## Layout
 
 ```
 app/
-├── api/v1/          # versioned HTTP layer (routers + route modules)
-├── core/            # centralized settings (config.py)
-├── db/              # engine, session, declarative base
-├── models/          # ORM models (empty in v0.1)
-├── schemas/         # Pydantic request/response models
-└── services/        # domain logic (health checks)
-alembic/             # migration environment (uses app.core.config)
-tests/               # pytest suite (no real database required)
+├── api/
+│   ├── deps.py      # get_current_user, CSRF origin check, rate limiter
+│   ├── errors.py    # sanitized 422 validation handler + generic 503 for DB-unavailable
+│   └── v1/routes/   # health.py, auth.py
+├── core/            # config.py, security.py (Argon2 + JWT), ratelimit.py
+├── db/              # engine, session, declarative base, registry
+├── models/          # user.py
+├── schemas/         # health.py, auth.py
+├── main.py          # app factory + no-store middleware for /api/v1/auth/*
+└── services/        # health.py, users.py
+alembic/versions/    # 02c49f7b5787_create_users_table.py
+tests/
+├── dbguard.py       # test-only database safety guard (shared)
+├── unit/            # fast, no database
+└── integration/     # real PostgreSQL; skip if TEST_DATABASE_URL unset, FAIL if set & bad
 requirements*.txt    # fully-resolved, hash-pinned locks (generated)
 ```
 
-## Health endpoints
+## Endpoints
 
 | Method | Path | Purpose | Codes |
 | --- | --- | --- | --- |
-| `GET` | `/api/v1/health/live` | Liveness - process is up. **Never** touches PostgreSQL. | `200` |
-| `GET` | `/api/v1/health/ready` | Readiness - live `SELECT 1` against PostgreSQL. | `200` / `503` |
-| `GET` | `/api/v1/health` | Summarized status (`healthy` / `degraded`). Kept for compatibility. | `200` / `503` |
+| `GET`  | `/api/v1/health/live`  | Liveness - process is up. **Never** touches PostgreSQL. | `200` |
+| `GET`  | `/api/v1/health/ready` | Readiness - live `SELECT 1` against PostgreSQL. | `200` / `503` |
+| `GET`  | `/api/v1/health`       | Summarized status (`healthy` / `degraded`). Compatibility alias. | `200` / `503` |
+| `POST` | `/api/v1/auth/register`| Create an account. | `201` / `409` / `422` / `429` |
+| `POST` | `/api/v1/auth/login`   | Authenticate; sets the `infraguard_access` HttpOnly cookie. | `200` / `401` / `429` |
+| `POST` | `/api/v1/auth/logout`  | Clear the auth cookie. | `200` |
+| `GET`  | `/api/v1/auth/me`      | The authenticated user's public profile. | `200` / `401` / `403` |
 
 The container `HEALTHCHECK` uses **liveness only**, so the backend is considered
 healthy as soon as the process serves requests - independent of the database.
+
+## Authentication
+
+### User model
+
+`app/models/user.py` - `id` (UUID PK, DB-generated), `email` (unique,
+lowercased + non-empty via CHECK constraints), `password_hash`, `is_active`,
+`created_at` / `updated_at` (timezone-aware). No roles, permissions or
+organizations - authorization is a later phase.
+
+### Password hashing
+
+Argon2id via `argon2-cffi` with the library's **recommended default
+parameters** (we do not hand-pick cryptographic settings). `check_needs_rehash`
+transparently upgrades stored hashes on the next successful login. Passwords are
+never stored in clear, never logged, and never returned. Policy: **12-128
+characters**, blank rejected, nothing truncated - passphrases and password
+managers are encouraged.
+
+### JWT access tokens
+
+`app/core/security.py`. HS256, secret from `JWT_SECRET` (config). Claims:
+`sub` (user id), `iat`, `nbf`, `exp`, `jti`, `iss`, `type=access` - **no**
+email or password material. Short-lived (`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`,
+default 15). Validation enforces signature, issuer, expiry and the required
+claims; malformed / expired / wrong-type / `alg=none` tokens are rejected.
+
+**No refresh tokens and no server-side revocation in v0.2.** Clearing the cookie
+on logout does not invalidate an already-issued token - it stays valid until it
+expires. A `jti` denylist (or short-lived access + refresh rotation) is the
+next hardening step. `JWT_SECRET` rotation / a KMS-managed key is a
+deployment-phase concern.
+
+### Token storage - cookie, not localStorage
+
+The access token is delivered as a cookie: `HttpOnly` (invisible to JS -
+mitigates token theft via XSS), `SameSite=Lax`, `Secure` in production,
+`Path=/`, `Max-Age` = token lifetime. The backend also accepts
+`Authorization: Bearer <token>` for non-browser API clients and tests.
+
+### CSRF
+
+`SameSite=Lax` + a strict `Origin`/`Referer` check on state-changing methods
+(`app/api/deps.py:require_trusted_origin`) + the credentialed-but-non-wildcard
+CORS policy. Requests without `Origin`/`Referer` (non-browser clients) are
+allowed; browser requests from a disallowed origin get `403`.
+
+### Validation errors & caching
+
+* `app/api/errors.py` installs a custom `RequestValidationError` handler that
+  returns only `{type, loc, msg}` per error. Pydantic's default body includes
+  `input` (the raw submitted value - a **plaintext password** for the password
+  field) and `ctx`; both are stripped. The frontend's per-field messages still
+  work off `detail[].loc` / `detail[].msg`.
+* A path-scoped middleware sets `Cache-Control: no-store` + `Pragma: no-cache`
+  on every `/api/v1/auth/*` response, including error responses.
+
+### Duplicate registration (accepted tradeoff)
+
+`register` returns an explicit `409 "Email is already registered"`, which allows
+account enumeration. Kept deliberately for portfolio usability; rate limiting
+blunts bulk probing. Production would use a generic response + out-of-band email
+confirmation. See `docs/architecture.md` §12.14.
+
+### Rate limiting
+
+Best-effort in-process fixed-window limiter (`app/core/ratelimit.py`) on
+`login` and `register` - `AUTH_RATE_LIMIT_MAX_ATTEMPTS` per
+`AUTH_RATE_LIMIT_WINDOW_SECONDS` per client IP. **Per-process and lost on
+restart** - production needs a shared store (Redis) or gateway/WAF rate
+limiting. No Redis is added for v0.2.
+
+## Migration workflow
+
+```bash
+# Local (host), against a running PostgreSQL:
+export DATABASE_URL=postgresql+psycopg://infraguard:...@localhost:5432/infraguard
+alembic upgrade head           # apply
+alembic downgrade -1           # roll back one
+alembic revision --autogenerate -m "add <table>"   # after model changes
+
+# Docker (one-shot, never runs on `up`):
+docker compose run --rm migrate
+```
+
+`alembic/env.py` imports `app.db.registry` (which imports every model) so
+autogenerate sees the full metadata. The DB URL comes from `app.core.config` -
+never duplicated into Alembic files.
 
 ## Configuration & `.env` resolution
 
@@ -44,11 +146,19 @@ server-side `ConfigurationError`, no secrets in the message) when:
 
 - the DB password is a well-known placeholder/default, or shorter than 12 chars;
 - the DB user is a placeholder/default (when the URL is assembled from parts);
-- `BACKEND_CORS_ORIGINS` contains a wildcard `*` or is empty.
+- `BACKEND_CORS_ORIGINS` contains a wildcard `*` or is empty;
+- **(v0.2)** `JWT_SECRET` is a placeholder/default or shorter than 32 chars;
+- **(v0.2)** `AUTH_COOKIE_SECURE` is explicitly `false`, or `SameSite=None`
+  without `Secure`.
 
 Production secrets are expected as real environment variables. A later deployment
 phase will source them from Kubernetes Secrets / an external secret manager;
-v0.1 does not integrate one.
+neither v0.1 nor v0.2 integrates one.
+
+New v0.2 keys (see `.env.example`): `JWT_SECRET`,
+`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `AUTH_COOKIE_SECURE`, `AUTH_COOKIE_SAMESITE`,
+`AUTH_RATE_LIMIT_MAX_ATTEMPTS`, `AUTH_RATE_LIMIT_WINDOW_SECONDS`,
+`PASSWORD_MIN_LENGTH`, `PASSWORD_MAX_LENGTH`.
 
 ## Local development (without Docker)
 
@@ -77,11 +187,33 @@ uvicorn app.main:app --reload
 
 ```bash
 pip install --require-hashes --no-deps -r requirements-dev.txt && pip install --no-deps -e .
-pytest
+
+# Disposable test database (name MUST be 'test' or end with '_test'):
+docker run -d --rm -e POSTGRES_DB=infraguard_test -e POSTGRES_USER=t \
+  -e POSTGRES_PASSWORD=t -p 127.0.0.1:55432:5432 postgres:17.2-alpine
+export TEST_DATABASE_URL=postgresql+psycopg://t:t@localhost:55432/infraguard_test
+
+pytest                       # fast unit tests only (default)
+pytest -m ""                 # unit + integration (real PostgreSQL)
+pytest -m integration        # integration only
 ```
 
-Tests override the DB dependency with an in-memory fake and force
-`ENVIRONMENT=test`, so no database (and no production validation) is involved.
+* **Unit** (`tests/unit/`) - no database, `ENVIRONMENT=test`, deterministic:
+  config fail-safety, Argon2 + JWT, password policy / schema serialization,
+  the rate limiter, health-endpoint behaviour, **the 422 no-reflection guard**,
+  **the no-store header rule**, and **the test-DB safety guard**.
+* **Integration** (`tests/integration/`) - each test runs in a transaction that
+  is rolled back; exercises the full register / login / `me` / logout API.
+
+### Integration test database safety (`tests/dbguard.py`)
+
+* **`TEST_DATABASE_URL` unset** → integration tests **skip**.
+* **`TEST_DATABASE_URL` set** → it must pass the guard *and* be reachable, or the
+  suite **fails** (never silently skips - important in CI):
+  * the database **name must be `test` or end with `_test`** (case-insensitive);
+  * it must not equal the application's own `DATABASE_URL` database.
+* Only then does the fixture run `drop_all` / `create_all`. This makes it
+  impossible to point the destructive fixture at a real database by mistake.
 
 ## Dependency management
 
@@ -112,17 +244,5 @@ Commit the regenerated `requirements*.txt` alongside the `pyproject.toml` change
 `-r requirements.txt` (runtime only). The Docker image builds a wheelhouse from
 `requirements.txt` and installs `--no-index` from it - no network, no build step.
 
-## Database migrations (Alembic)
-
-`alembic/env.py` imports `app.core.config` and `app.db.base:Base`, so the URL and
-metadata come from the one central place - credentials are never copied into
-Alembic files.
-
-```bash
-alembic revision --autogenerate -m "add asset table"
-alembic upgrade head
-alembic downgrade -1
-# in Docker: docker compose exec backend alembic upgrade head
-```
-
-No migrations exist in v0.1 - the domain model has not been introduced yet.
+**v0.2 additions:** `pyjwt`, `argon2-cffi`, `email-validator` (and their
+transitive deps `cffi`, `pycparser`, `argon2-cffi-bindings`, `dnspython`).
