@@ -27,6 +27,7 @@ const config: Config = {
         },
         success: token("success"),
         warning: token("warning"),
+        caution: token("caution"),
         danger: token("danger"),
         ring: token("ring"),
       },

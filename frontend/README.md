@@ -16,21 +16,25 @@ pnpm build
 
 ```
 src/
-├── app/                  routes: / · /login · /register · /dashboard · /healthz
+├── app/                  routes: / · /login · /register · /dashboard ·
+│                         /assets · /assets/new · /assets/[id] · /assets/[id]/edit · /healthz
 ├── components/
-│   ├── ui/               design system (Button, Input, Card, Badge, Alert,
-│   │                     PageHeader, Spinner, EmptyState, Reveal, icons)
+│   ├── ui/               design system (Button, Input, Select, Textarea, Card,
+│   │                     Badge, Alert, PageHeader, Pagination, Spinner,
+│   │                     EmptyState, Reveal, icons)
 │   ├── theme/            ThemeProvider (next-themes) + ThemeToggle
 │   ├── shell/            AppShell · Sidebar · SidebarFooter · Topbar ·
 │   │                     MobileNav · NavList · LogoutButton
 │   ├── auth/             AuthLayout
 │   ├── dashboard/        PlatformModules · AccountCard
+│   ├── assets/           AssetsBrowser · AssetsTable · AssetFilters · AssetForm ·
+│   │                     AssetDetail · AssetBadges · catalog
 │   ├── AuthProvider · RequireAuth · AuthForm · AuthNav · Brand ·
 │   │                     SystemHealth · LanguageSwitcher
 ├── i18n/                 LanguageProvider · useTranslation() · translations/{es,en}
-├── lib/                  cn · config · validation · navigation
-├── services/             auth · health  (fetch wrappers - never throw)
-├── types/                auth · health  (+ runtime type guards)
+├── lib/                  cn · config · validation · assetValidation · navigation
+├── services/             auth · health · assets  (fetch wrappers - never throw)
+├── types/                auth · health · asset  (+ runtime type guards)
 └── test/                 shared test helpers (matchMedia)
 ```
 
@@ -108,9 +112,30 @@ switcher, theme toggle, the signed-in identity, and a confirmation-gated
 `<LogoutButton>` (a first tap arms an explicit Confirm / Cancel step; state is
 only cleared when `logout()` returns `{ ok: true }`). The mobile drawer repeats
 the same controls. Navigation (`src/lib/navigation.ts`) uses fixed English
-labels: **Dashboard** is the only real route; **Assets / Incidents / AI
-Assistant / Settings** render as disabled "Coming soon" items. Routes are
-guarded client-side by `<RequireAuth>`.
+labels: **Dashboard** and **Assets** are real routes; **Incidents / AI Assistant
+/ Settings** render as disabled "Coming soon" items. Routes are guarded
+client-side by `<RequireAuth>`.
+
+## Assets (infrastructure inventory)
+
+| Route | Purpose |
+| --- | --- |
+| `/assets` | list - title, result count, debounced search, catalog + activity filters, "New asset", responsive table (cards below `lg`), pagination, and explicit loading / empty / filtered-empty / error states. Search, filters and page are mirrored into the URL query string; the component that reads `useSearchParams` sits inside a `<Suspense>` boundary |
+| `/assets/new` | `<AssetForm mode="create">` |
+| `/assets/[id]` | detail - header + criticality/status badges, overview, description, actions (Edit, confirmation-gated Deactivate / Reactivate), and a disabled dependencies/incidents placeholder |
+| `/assets/[id]/edit` | `<AssetForm mode="edit" initial={asset}>` |
+
+- **One form** (`AssetForm`) for create and edit. Client validation lives in
+  `lib/assetValidation.ts` (returns codes the component translates); server
+  field errors from a `422` are merged in.
+- **Service layer** (`services/assets.ts`) never throws - every outcome
+  (`unreachable` / `unauthorized` / `not_found` / `validation` / `rate_limited` /
+  `unexpected`) is a typed result. All calls use `credentials: "include"`.
+- **Catalog i18n:** the vocabulary values (`Server`, `Production`, `Critical`,
+  `Operational`, …) are English in the data; `components/assets/catalog.ts` maps
+  each to a translation key for display. Criticality / status badges always
+  carry the translated **text** - colour is only a hint (accessible + grayscale
+  safe, both themes). The `Assets` nav label itself stays English.
 
 ## Auth screen
 
@@ -142,5 +167,10 @@ Vitest + Testing Library, behaviour-focused. Covers the contextual theme toggle
 `ES | EN` switcher (default / interpolation / persistence / fallback), the
 single-card auth layout and forms (incl. the show/hide-password control), the
 app shell + active nav + sidebar footer, the mobile drawer (open / Escape /
-navigate-to-close), the confirmation-gated `LogoutButton`, and that
-authentication + logout still behave correctly.
+navigate-to-close), the confirmation-gated `LogoutButton`, authentication +
+logout, and the **assets module**: the service wrappers (status → typed
+result), `assetValidation` (IP + form rules), `AssetForm` (client validation,
+normalised submit, server errors, edit prefill, es/en), `AssetsTable` (rows /
+badges / inactive / re-translation), `AssetsBrowser` (loading / empty / error +
+retry / search / filter / pagination / count), and `AssetDetail` (render +
+confirmation-gated deactivate / reactivate).

@@ -31,7 +31,10 @@ function DashboardContent() {
         <PlatformModules />
       </Reveal>
 
-      <Reveal delayMs={120} className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
+      <Reveal
+        delayMs={120}
+        className="grid gap-6 [&>*]:min-w-0 lg:grid-cols-[1.6fr_1fr] lg:items-start xl:grid-cols-[2fr_1fr]"
+      >
         <SystemHealthPanel />
         <AccountCard user={user} />
       </Reveal>

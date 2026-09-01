@@ -23,6 +23,22 @@ export const AUTH_ENDPOINTS = {
   me: `${v1}/auth/me`,
 } as const;
 
+/** Assets / infrastructure inventory API. */
+export const ASSETS_ENDPOINT = `${v1}/assets`;
+
+/** Asset list pagination defaults - mirror the backend (app/schemas/asset.py). */
+export const ASSETS_PAGE_SIZE = 20;
+export const ASSETS_MAX_PAGE_SIZE = 100;
+
+/** Asset field length caps - mirror the backend model (app/models/asset.py). */
+export const ASSET_LIMITS = {
+  name: 200,
+  hostname: 253,
+  ipAddress: 45,
+  owner: 200,
+  description: 2000,
+} as const;
+
 /** Password policy - mirrors the backend (app/core/config.py). */
 export const PASSWORD_MIN_LENGTH = 12;
 export const PASSWORD_MAX_LENGTH = 128;

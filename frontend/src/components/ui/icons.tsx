@@ -136,3 +136,28 @@ export const RefreshIcon = (p: IconProps) => (
     <path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5" />
   </Base>
 );
+
+export const PlusIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 5v14M5 12h14" />
+  </Base>
+);
+
+export const SearchIcon = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="m21 21-4.3-4.3" />
+  </Base>
+);
+
+export const ArrowLeftIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M19 12H5M12 19l-7-7 7-7" />
+  </Base>
+);
+
+export const PencilIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+  </Base>
+);

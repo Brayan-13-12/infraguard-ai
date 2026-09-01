@@ -6,6 +6,9 @@ FastAPI service for InfraGuard AI.
 * **v0.2** - authentication & identity: the first persistent entity (`User`),
   registration / login / logout / `me`, Argon2id password hashing, JWT access
   tokens delivered as an HttpOnly cookie, the first Alembic migration.
+* **Assets** - infrastructure inventory: the `Asset` entity, authenticated
+  `/api/v1/assets` CRUD with pagination / search / filters and soft
+  deactivate / reactivate, second Alembic migration.
 
 ## Layout
 
@@ -14,14 +17,14 @@ app/
 ├── api/
 │   ├── deps.py      # get_current_user, CSRF origin check, rate limiter
 │   ├── errors.py    # sanitized 422 validation handler + generic 503 for DB-unavailable
-│   └── v1/routes/   # health.py, auth.py
+│   └── v1/routes/   # health.py, auth.py, assets.py
 ├── core/            # config.py, security.py (Argon2 + JWT), ratelimit.py
 ├── db/              # engine, session, declarative base, registry
-├── models/          # user.py
-├── schemas/         # health.py, auth.py
+├── models/          # user.py, asset.py (+ catalog StrEnums)
+├── schemas/         # health.py, auth.py, asset.py
 ├── main.py          # app factory + no-store middleware for /api/v1/auth/*
-└── services/        # health.py, users.py
-alembic/versions/    # 02c49f7b5787_create_users_table.py
+└── services/        # health.py, users.py, assets.py
+alembic/versions/    # *_create_users_table.py, *_create_assets_table.py
 tests/
 ├── dbguard.py       # test-only database safety guard (shared)
 ├── unit/            # fast, no database
@@ -40,9 +43,42 @@ requirements*.txt    # fully-resolved, hash-pinned locks (generated)
 | `POST` | `/api/v1/auth/login`   | Authenticate; sets the `infraguard_access` HttpOnly cookie. | `200` / `401` / `429` |
 | `POST` | `/api/v1/auth/logout`  | Clear the auth cookie. | `200` |
 | `GET`  | `/api/v1/auth/me`      | The authenticated user's public profile. | `200` / `401` / `403` |
+| `GET`  | `/api/v1/assets`       | List assets (paginated, `q` search, catalog + `is_active` filters). **Auth.** | `200` / `401` / `422` |
+| `POST` | `/api/v1/assets`       | Create an asset. **Auth + CSRF.** | `201` / `401` / `403` / `422` |
+| `GET`  | `/api/v1/assets/{id}`  | Asset detail. **Auth.** | `200` / `401` / `404` |
+| `PATCH`| `/api/v1/assets/{id}`  | Partial content update (no `is_active`). **Auth + CSRF.** | `200` / `401` / `403` / `404` / `422` |
+| `POST` | `/api/v1/assets/{id}/deactivate` \| `/reactivate` | Soft lifecycle toggle (idempotent). **Auth + CSRF.** | `200` / `401` / `403` / `404` |
 
 The container `HEALTHCHECK` uses **liveness only**, so the backend is considered
 healthy as soon as the process serves requests - independent of the database.
+
+## Assets (infrastructure inventory)
+
+`app/models/asset.py` - `id` (UUID PK), `name` + `asset_type` / `environment` /
+`criticality` / `status` (required, each a `varchar` + DB `CHECK` built from a
+Python `StrEnum` catalog), optional `hostname` / `ip_address` / `description` /
+`owner`, `is_active`, tz-aware `created_at` / `updated_at`. Indexes on `name`,
+every filter column and `created_at`. **No UNIQUE constraint** - the same name
+recurs legitimately across environments.
+
+- **Catalog:** `StrEnum` + `CHECK`, not catalog tables (overhead for a fixed
+  vocabulary) and not a native PG `ENUM` (needs a migration to extend). Values
+  are stored in English; the frontend translates them for display.
+- **Validation** (`app/schemas/asset.py`): `AssetCreate` / `AssetUpdate` set
+  `extra="forbid"`; `ip_address` is parsed with `ipaddress` and stored
+  normalised; optional strings are trimmed, blank → `NULL`.
+- **List** (`app/services/assets.py`): pagination metadata
+  (`items/page/page_size/total/total_pages`), `page_size` capped at 100, ordering
+  `updated_at DESC, id DESC`. Search is an **escaped** `ILIKE '%term%'` over
+  `name` / `hostname` / `owner` / `ip_address`, built with the SQLAlchemy
+  expression API - never string-concatenated SQL.
+- **Deactivation - decision:** no `DELETE`. Lifecycle is the dedicated
+  `POST /{id}/deactivate` + `/reactivate` pair (idempotent, explicit,
+  auditable); `PATCH` stays content-only. A deactivated asset is still
+  queryable with `is_active=false`.
+- **Known limits:** no trigram search index, no per-asset authorization (any
+  authenticated user edits any asset - RBAC is a later phase), no bulk ops /
+  import / export, last-write-wins on `PATCH`.
 
 ## Authentication
 
@@ -130,7 +166,10 @@ docker compose run --rm migrate
 
 `alembic/env.py` imports `app.db.registry` (which imports every model) so
 autogenerate sees the full metadata. The DB URL comes from `app.core.config` -
-never duplicated into Alembic files.
+never duplicated into Alembic files. Two migrations so far: `users` then
+`assets` (chained via `down_revision`). Both were hand-reviewed and validated on
+the Docker PostgreSQL (`upgrade → downgrade -1 → upgrade`, plus `alembic check`
+shows no model/DB drift).
 
 ## Configuration & `.env` resolution
 
@@ -201,9 +240,14 @@ pytest -m integration        # integration only
 * **Unit** (`tests/unit/`) - no database, `ENVIRONMENT=test`, deterministic:
   config fail-safety, Argon2 + JWT, password policy / schema serialization,
   the rate limiter, health-endpoint behaviour, **the 422 no-reflection guard**,
-  **the no-store header rule**, and **the test-DB safety guard**.
+  **the no-store header rule**, **the test-DB safety guard**, the **asset
+  schema validation** (enums / IP / limits / `extra="forbid"`), and that **every
+  asset endpoint rejects an unauthenticated request** before touching the DB.
 * **Integration** (`tests/integration/`) - each test runs in a transaction that
-  is rolled back; exercises the full register / login / `me` / logout API.
+  is rolled back; exercises the full register / login / `me` / logout API and
+  the full asset lifecycle (create / list / paginate / search / filter / detail /
+  update / deactivate / reactivate / 401 / 404 / invalid enum / invalid IP /
+  DB-error → generic `503`). An `auth_client` fixture provides a logged-in client.
 
 ### Integration test database safety (`tests/dbguard.py`)
 
