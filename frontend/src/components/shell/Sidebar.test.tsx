@@ -57,9 +57,14 @@ describe("Sidebar", () => {
     expect(dashboard).toHaveAttribute("aria-current", "page");
   });
 
+  it("links Assets as an active route", () => {
+    renderSidebar();
+    expect(screen.getByRole("link", { name: "Assets" })).toHaveAttribute("href", "/assets");
+  });
+
   it("renders unbuilt modules as disabled 'Coming soon' items, not links", () => {
     renderSidebar();
-    for (const label of ["Assets", "Incidents", "AI Assistant", "Settings"]) {
+    for (const label of ["Incidents", "AI Assistant", "Settings"]) {
       expect(screen.queryByRole("link", { name: label })).not.toBeInTheDocument();
       expect(screen.getByText(label).closest("[aria-disabled='true']")).toBeTruthy();
     }

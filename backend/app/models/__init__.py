@@ -1,9 +1,24 @@
 """ORM models package.
 
-v0.2 introduces the first persistent entity: ``User``. The wider InfraGuard
-domain (assets, services, dependencies, incidents) remains a later phase.
+* v0.2 - ``User`` (authentication & identity).
+* Assets milestone - ``Asset`` (infrastructure inventory), the first
+  business-domain entity.
 """
 
+from app.models.asset import (
+    Asset,
+    AssetStatus,
+    AssetType,
+    Criticality,
+    Environment,
+)
 from app.models.user import User
 
-__all__ = ["User"]
+__all__ = [
+    "Asset",
+    "AssetStatus",
+    "AssetType",
+    "Criticality",
+    "Environment",
+    "User",
+]

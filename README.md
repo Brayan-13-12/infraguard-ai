@@ -6,16 +6,19 @@ InfraGuard AI aims to help operations teams understand their infrastructure,
 model service dependencies, manage incidents, and get AI-assisted analysis of
 impact and root cause.
 
-> ## Current status: `v0.2` - Authentication & Identity
+> ## Current status: Assets - Infrastructure Inventory
 >
-> Builds on the v0.1 bootstrap (monorepo, liveness/readiness, segmented +
-> hardened Docker, dependency locking, CI). **v0.2 adds the first persistent
-> entity (`User`)** and email + password authentication: register, log in
-> (Argon2id + short-lived JWT in an HttpOnly cookie), `GET /auth/me`, log out,
-> and a client-guarded `/dashboard`. **No further domain** (assets, incidents,
-> dashboards, AI, graphs) and **no RBAC / OAuth / MFA / refresh tokens / password
-> reset / email verification** - see [Roadmap](#roadmap). This is **not**
-> production-ready.
+> Builds on the bootstrap (v0.1), authentication (v0.2) and the UI foundation
+> (v0.3). This milestone adds the **first business-domain module**: an
+> infrastructure inventory. Authenticated users can list (paginated, searchable,
+> filterable), view, create, edit and soft-deactivate / reactivate **assets**
+> (servers, VMs, databases, applications, network devices, containers, Kubernetes
+> clusters, cloud resources) at `/api/v1/assets` and `/assets`.
+>
+> **Still out of scope** (later phases): dependency graphs / Neo4j, incidents, AI
+> analysis, Kubernetes, obsolescence, RBAC / roles, and (from v0.2) OAuth / MFA /
+> refresh tokens / password reset / email verification / server-side JWT
+> revocation. See [Roadmap](#roadmap). This is **not** production-ready.
 
 ---
 
@@ -51,7 +54,7 @@ bridges the two tiers. Full detail (with Mermaid diagrams) is in
 | Backend | Python 3.13, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, pytest, ruff |
 | Auth | Argon2id (`argon2-cffi`), JWT HS256 (`pyjwt`), HttpOnly cookie |
 | Backend deps | `pyproject.toml` + hash-pinned `requirements*.txt` (pip-tools) |
-| Database | PostgreSQL 17 (Docker only) - `users` table via Alembic |
+| Database | PostgreSQL 17 (Docker only) - `users` + `assets` tables via Alembic |
 | Orchestration | Docker + Docker Compose (segmented networks, hardened containers) |
 | CI | GitHub Actions - lint, unit + integration tests, Docker build + migrate + auth smoke test (SHA-pinned actions) |
 
@@ -59,13 +62,14 @@ bridges the two tiers. Full detail (with Mermaid diagrams) is in
 
 ```
 infraguard-ai/
-├── frontend/           Next.js app  (see frontend/README.md for the UI foundation)
-│   └── src/            app/{login,register,dashboard,healthz} · components/{ui,theme,shell,auth,
-│                       dashboard} · services/{auth,health} · lib · types
+├── frontend/           Next.js app  (see frontend/README.md)
+│   └── src/            app/{login,register,dashboard,assets,healthz} ·
+│                       components/{ui,theme,shell,auth,dashboard,assets} ·
+│                       services/{auth,health,assets} · i18n · lib · types
 ├── backend/            FastAPI app
 │   ├── app/            api/{deps,errors,v1/routes} · core/{config,security,ratelimit}
-│   │                   · db · models/user · schemas · services
-│   ├── alembic/versions/   02c49f7b5787_create_users_table.py
+│   │                   · db · models/{user,asset} · schemas · services
+│   ├── alembic/versions/   *_create_users_table.py · *_create_assets_table.py
 │   ├── tests/{unit,integration}/
 │   └── requirements*.txt   hash-pinned dependency locks
 ├── infra/              Placeholder for future IaC (Kubernetes, Helm)
@@ -190,8 +194,17 @@ pnpm dev
 | `POST` | `/api/v1/auth/login` | `{email, password}` → `200` user + sets HttpOnly cookie · `401` · `429` |
 | `POST` | `/api/v1/auth/logout` | Clears the auth cookie → `200` |
 | `GET` | `/api/v1/auth/me` | Authenticated user's public profile → `200` · `401` · `403` |
+| `GET` | `/api/v1/assets` | List assets - `page` `page_size` `q` `asset_type` `environment` `criticality` `status` `is_active` → `200` (auth) |
+| `POST` | `/api/v1/assets` | Create an asset → `201` · `422` (auth) |
+| `GET` | `/api/v1/assets/{id}` | Asset detail → `200` · `404` (auth) |
+| `PATCH` | `/api/v1/assets/{id}` | Partial content update → `200` · `404` · `422` (auth) |
+| `POST` | `/api/v1/assets/{id}/deactivate` · `/reactivate` | Soft lifecycle toggle → `200` · `404` (auth) |
 | `GET` | `/docs` · `/openapi.json` | Swagger UI / OpenAPI schema |
 | `GET` | `/` | Service metadata |
+
+All `/api/v1/assets*` endpoints require authentication (`get_current_user`);
+state-changing methods also pass the `Origin`/`Referer` CSRF check. There is no
+destructive delete - deactivated assets remain queryable with `is_active=false`.
 
 The `503` responses are documented in OpenAPI with the **same** schema as their
 `200` counterparts. Login failures are **generic** (`Invalid email or password`)
@@ -322,11 +335,26 @@ Revocation is a documented next step.
 - Responsive 360-1440px, `prefers-reduced-motion` respected, keyboard-accessible
   navigation, language and theme controls
 
+**Assets - Infrastructure Inventory**
+
+- `Asset` model (UUID PK; `name` + `asset_type` / `environment` / `criticality` /
+  `status` required, each DB-`CHECK`-constrained to a catalog; optional
+  `hostname` / `ip_address` / `description` / `owner`; `is_active`; tz-aware
+  timestamps) + Alembic migration (validated `upgrade → downgrade → upgrade`)
+- Authenticated `/api/v1/assets` CRUD with pagination metadata, escaped `ILIKE`
+  search (name / hostname / owner / IP), and catalog + active-state filters
+- **Soft deactivation only** - no hard delete; lifecycle via dedicated
+  `/deactivate` + `/reactivate` endpoints (`PATCH` is content-only)
+- Frontend `/assets` (list + filters + search + pagination), `/assets/new`,
+  `/assets/[id]` (detail + lifecycle actions), `/assets/[id]/edit`; a reusable
+  `AssetForm`; Assets is now an **active** navigation item; catalog values are
+  stored in English and translated (es/en) only for display
+
 ### Planned (future phases)
 
 - Authorization / RBAC / roles; refresh-token rotation; JWT revocation; password
   reset; email verification; OAuth; MFA
-- Infrastructure asset & service model, dependencies
+- Service & dependency modelling; asset lifecycle / obsolescence
 - Incident management and impact analysis
 - Infrastructure dependency graph (Neo4j)
 - AI-assisted incident analysis (AI providers, RAG)

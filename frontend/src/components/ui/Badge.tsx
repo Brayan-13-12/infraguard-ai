@@ -1,11 +1,12 @@
 import { cn } from "@/lib/cn";
 
-type Tone = "neutral" | "success" | "warning" | "danger" | "info";
+type Tone = "neutral" | "success" | "warning" | "caution" | "danger" | "info";
 
 const TONES: Record<Tone, string> = {
   neutral: "bg-muted text-muted-foreground",
   success: "bg-success/12 text-success",
   warning: "bg-warning/14 text-warning",
+  caution: "bg-caution/14 text-caution",
   danger: "bg-danger/12 text-danger",
   info: "bg-primary/12 text-primary",
 };

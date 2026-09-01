@@ -30,7 +30,7 @@ const MODULES: ModuleDef[] = [
   {
     name: "Assets",
     descriptionKey: "dashboard.modules.assetsDescription",
-    status: "soon",
+    status: "active",
     Icon: BoxIcon,
   },
   {
@@ -55,14 +55,14 @@ export function PlatformModules() {
       <h2 id="modules-heading" className="text-base font-semibold text-foreground">
         {t("dashboard.modulesTitle")}
       </h2>
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
         {MODULES.map(({ name, descriptionKey, status, Icon }) => {
           const active = status === "active";
           return (
             <Card
               key={name}
               className={
-                "flex items-start gap-3.5 p-4 transition-[transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:shadow-md motion-reduce:transform-none " +
+                "flex h-full items-start gap-3.5 p-4 transition-[transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:shadow-md motion-reduce:transform-none " +
                 (active ? "" : "opacity-95")
               }
             >

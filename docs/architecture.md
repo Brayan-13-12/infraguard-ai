@@ -6,6 +6,11 @@
 >   Docker, dependency locking, CI. (Sections 1-11.)
 > * **v0.2 - Authentication & Identity:** the `User` entity, register / login /
 >   logout / `me`, Argon2id, JWT-in-HttpOnly-cookie. (Section 12.)
+> * **v0.3 - UI Foundation:** design tokens, theme toggle, i18n (es/en), app
+>   shell. (Section 3.)
+> * **Assets - Infrastructure Inventory:** the `Asset` entity, authenticated
+>   `/api/v1/assets` CRUD + search + filters + pagination, soft deactivation, and
+>   the `/assets` frontend module. (Section 13.)
 
 ## 1. Project purpose
 
@@ -209,8 +214,10 @@ Development and test environments keep the convenient placeholder defaults.
 PostgreSQL is the platform's relational store. It runs **only** as a Docker
 container (never installed on the host), on an **internal** network with no host
 port and no outbound internet route. The backend uses a bounded connection pool
-(`pool_pre_ping=True`, connect timeout). As of **v0.2** the schema contains one
-table, `users`, created by the first Alembic migration (see 12.2).
+(`pool_pre_ping=True`, connect timeout). The schema contains two tables: `users`
+(v0.2, migration `02c49f7b5787`) and `assets` (migration `7f3a9c2b1e84`, see
+section 13). Each ORM model is registered on `Base.metadata` via
+`app/db/registry.py`, which Alembic and the integration test fixtures import.
 
 ### Migrations
 
@@ -558,7 +565,117 @@ limiter, API gateway, or WAF) - deferred to the security-hardening phase.
 - **Protected routing is client-side** (see 12.8).
 - Password strength is length-only (no breached-password check - deferred).
 
-## 13. Future direction
+## 13. Assets - Infrastructure Inventory
+
+### 13.1 Scope
+
+The first business-domain module: a flat inventory of infrastructure items.
+**In scope:** list (paginated / searchable / filterable), detail, create, partial
+update, soft deactivate / reactivate - all authenticated. **Out of scope (later
+phases):** dependency graphs / Neo4j, incidents, AI analysis, health telemetry,
+obsolescence, per-asset authorization.
+
+### 13.2 `Asset` model & migration
+
+`app/models/asset.py` (table `assets`, migration `7f3a9c2b1e84`, `down_revision`
+= the users migration):
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `UUID` PK | DB default `gen_random_uuid()` |
+| `name` | `varchar(200)` | required; CHECK non-empty |
+| `asset_type` | `varchar(40)` | required; CHECK ∈ {Server, Virtual Machine, Database, Application, Network Device, Container, Kubernetes Cluster, Cloud Resource} |
+| `environment` | `varchar(20)` | required; CHECK ∈ {Production, Staging, Development, Test} |
+| `criticality` | `varchar(10)` | required; CHECK ∈ {Critical, High, Medium, Low} |
+| `status` | `varchar(20)` | required; CHECK ∈ {Operational, Degraded, Maintenance, Offline} |
+| `hostname` | `varchar(253)` | optional |
+| `ip_address` | `varchar(45)` | optional; validated as IPv4/IPv6 by the schema, stored normalised |
+| `description` | `text` | optional (≤ 2000 chars at the schema) |
+| `owner` | `varchar(200)` | optional |
+| `is_active` | `boolean` | default `true` - the soft-deactivation flag |
+| `created_at` / `updated_at` | `timestamptz` | server default `now()`; `updated_at` `onupdate` |
+
+**Catalog values as `StrEnum` + `CHECK`, not tables or native enums.** The
+vocabulary is small and fixed, so a catalog table would be overhead. A native
+PostgreSQL `ENUM` would need a migration to extend; a `varchar` + `CHECK` built
+from the `StrEnum` is trivially altered later. Values are stored in English
+(matching the enum) and translated only for display in the frontend.
+
+**Indexes:** `name`, each filter column (`asset_type`, `environment`,
+`criticality`, `status`, `is_active`) and `created_at`. **No UNIQUE
+constraint** - the same name legitimately recurs across environments (a
+`web-01` in Production and in Staging), and hostname/IP are optional.
+
+Validated on the Docker PostgreSQL: `upgrade → downgrade → upgrade`, and
+`alembic check` reports no drift from the model.
+
+### 13.3 API
+
+`app/api/v1/routes/assets.py`, router-level `Depends(get_current_user)` (every
+endpoint authenticated); writes also `Depends(require_trusted_origin)`.
+
+| Method | Path | Notes | Codes |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/assets` | `page` (≥1), `page_size` (1-100, default 20), `q`, `asset_type`, `environment`, `criticality`, `status`, `is_active` | `200` / `401` / `422` |
+| `GET` | `/api/v1/assets/{id}` | | `200` / `401` / `404` |
+| `POST` | `/api/v1/assets` | `AssetCreate` (`extra="forbid"`) | `201` / `401` / `403` / `422` |
+| `PATCH` | `/api/v1/assets/{id}` | `AssetUpdate` (`extra="forbid"`, no `is_active`) - only sent fields change | `200` / `401` / `403` / `404` / `422` |
+| `POST` | `/api/v1/assets/{id}/deactivate` | idempotent; `updated_at` only moves on a real change | `200` / `401` / `403` / `404` |
+| `POST` | `/api/v1/assets/{id}/reactivate` | idempotent | `200` / `401` / `403` / `404` |
+
+**Pagination** response: `{ items, page, page_size, total, total_pages }`.
+`total_pages = ceil(total / page_size)` (0 when empty). Ordering is
+`updated_at DESC, id DESC` for a stable page window. `page_size` is capped so a
+client cannot request an unbounded result set.
+
+**Search** (`services/assets.py`) is a case-insensitive `ILIKE '%term%'` over
+`name`, `hostname`, `owner` and `ip_address`, built with the SQLAlchemy
+expression API. The term's `%` / `_` / `\` are escaped so they match literally.
+Contains-search is not index-accelerated yet - a trigram / GIN index is a future
+optimisation, noted in the limitations.
+
+### 13.4 Deactivation - decision
+
+There is **no `DELETE`**. Assets carry history and references, so a hard delete
+is the wrong default. Lifecycle is a **dedicated pair of POST endpoints**
+(`/deactivate`, `/reactivate`) rather than a field on `PATCH`: the intent is
+explicit, the calls are idempotent, they are easy to audit later, and `PATCH`
+stays purely about content (`AssetUpdate` has no `is_active`, and sending it is
+a `422`). A deactivated asset stays fully queryable with `is_active=false`.
+
+### 13.5 Frontend
+
+Routes under `/assets`, all client components wrapped in
+`<RequireAuth><AppShell>`:
+
+| Route | Purpose |
+| --- | --- |
+| `/assets` | list: page title, result count, search (debounced), catalog + state filters, "New asset", responsive table (cards below `lg`), pagination, and explicit loading / empty / filtered-empty / error states. Filter + search + page are reflected in the URL query string (shareable, back/forward friendly); `useSearchParams` is read inside a `<Suspense>` boundary |
+| `/assets/new` | `<AssetForm mode="create">` |
+| `/assets/[id]` | detail: header (name, type, criticality + status badges), overview, description, actions (Edit link, confirmation-gated Deactivate / Reactivate), and a disabled "dependencies & incidents" placeholder |
+| `/assets/[id]/edit` | `<AssetForm mode="edit" initial={asset}>` |
+
+`AssetForm` is the single create/edit component (client validation via
+`lib/assetValidation.ts` returning codes the UI translates; server field errors
+from a `422` are merged in). The service layer (`services/assets.ts`) never
+throws - every outcome (`unreachable` / `unauthorized` / `not_found` /
+`validation` / `rate_limited` / `unexpected`) is a typed result the UI renders.
+
+**i18n:** catalog values are English in the data and translated for display via
+`components/assets/catalog.ts` (explicit `Record<Value, TranslationKey>` maps).
+Criticality / status badges always carry the translated text, so meaning does not
+depend on colour. The `Assets` nav label, like all module names, stays English.
+
+### 13.6 Known limitations
+
+- No dependency links, incidents, health checks or obsolescence - later phases.
+- Search is `ILIKE '%...%'` with no trigram index (fine at this scale).
+- No per-asset ownership / authorization - any authenticated user can edit any
+  asset (RBAC is a dedicated future phase).
+- No bulk operations, CSV import/export, or audit log.
+- No optimistic-concurrency token on `PATCH` (last write wins).
+
+## 14. Future direction
 
 Later, dedicated feature branches are expected to add:
 

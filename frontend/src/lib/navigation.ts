@@ -22,13 +22,13 @@ export interface NavItem {
 }
 
 /**
- * Primary navigation. Only Dashboard is a real route today; the rest are shown
- * as disabled "Coming soon" items so the shell reads as intentional without
- * faking functionality.
+ * Primary navigation. Dashboard and Assets are real routes; Incidents and AI
+ * Assistant are shown as disabled "Coming soon" items so the shell reads as
+ * intentional without faking functionality.
  */
 export const PRIMARY_NAV: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutIcon, status: "active" },
-  { label: "Assets", href: "/assets", icon: BoxIcon, status: "soon" },
+  { label: "Assets", href: "/assets", icon: BoxIcon, status: "active" },
   { label: "Incidents", href: "/incidents", icon: ShieldIcon, status: "soon" },
   { label: "AI Assistant", href: "/ai", icon: SparklesIcon, status: "soon" },
 ];

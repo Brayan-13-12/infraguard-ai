@@ -98,3 +98,12 @@ def client(db_session: Session) -> Iterator[TestClient]:
         yield test_client
     app.dependency_overrides.clear()
     reset_rate_limiters()
+
+
+@pytest.fixture
+def auth_client(client: TestClient) -> TestClient:
+    """A ``client`` that has registered and logged in a user (auth cookie set)."""
+    creds = {"email": "asset-owner@example.com", "password": "a-perfectly-fine-passphrase"}
+    assert client.post("/api/v1/auth/register", json=creds).status_code == 201
+    assert client.post("/api/v1/auth/login", json=creds).status_code == 200
+    return client

@@ -82,12 +82,20 @@ describe("DashboardPage", () => {
     expect(screen.getByText("user-1234")).toBeInTheDocument();
   });
 
-  it("presents platform modules truthfully", async () => {
+  it("presents platform modules truthfully - Authentication and Assets are active", async () => {
     renderDashboard();
     const modules = (await screen.findByText("Módulos de la plataforma")).closest("section")!;
     expect(within(modules).getByText("Authentication")).toBeInTheDocument();
-    expect(within(modules).getByText("Activo")).toBeInTheDocument();
-    expect(within(modules).getAllByText("Coming soon")).toHaveLength(3);
+    expect(within(modules).getByText("Assets")).toBeInTheDocument();
+
+    // Two active modules; only Incidents + AI Intelligence remain "Coming soon".
+    expect(within(modules).getAllByText("Activo")).toHaveLength(2);
+    expect(within(modules).getAllByText("Coming soon")).toHaveLength(2);
+
+    // The Assets card itself shows Active, never "Coming soon".
+    const assetsCard = within(modules).getByText("Assets").closest("div")!;
+    expect(within(assetsCard).getByText("Activo")).toBeInTheDocument();
+    expect(within(assetsCard).queryByText("Coming soon")).not.toBeInTheDocument();
   });
 
   it("signs out from the sidebar with an explicit confirm step", async () => {
