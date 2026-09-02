@@ -4,7 +4,6 @@ import Link from "next/link";
 
 import { AuthNav } from "@/components/AuthNav";
 import { Brand } from "@/components/Brand";
-import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { SystemHealthPanel } from "@/components/SystemHealth";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { Badge } from "@/components/ui/Badge";
@@ -21,7 +20,6 @@ export default function Home() {
         <div className="mx-auto flex h-16 max-w-5xl items-center justify-between gap-4 px-4 sm:px-6">
           <Brand />
           <div className="flex items-center gap-2 sm:gap-3">
-            <LanguageSwitcher className="hidden sm:inline-flex" />
             <ThemeToggle className="hidden sm:inline-flex" />
             <AuthNav />
           </div>

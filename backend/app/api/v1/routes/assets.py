@@ -30,6 +30,7 @@ from app.schemas.asset import (
     AssetCreate,
     AssetPage,
     AssetRead,
+    AssetSummary,
     AssetUpdate,
     MessageResponse,
 )
@@ -37,6 +38,7 @@ from app.services.assets import (
     AssetQuery,
     create_asset,
     get_asset,
+    get_asset_summary,
     list_assets,
     set_active,
     update_asset,
@@ -66,16 +68,16 @@ def list_assets_endpoint(
     q: str | None = Query(None, max_length=200, description="Search name/hostname/owner/IP"),
     asset_type: AssetType | None = Query(None),
     environment: Environment | None = Query(None),
-    criticality: Criticality | None = Query(None),
-    status_filter: AssetStatus | None = Query(None, alias="status"),
+    criticality: list[Criticality] | None = Query(None, description="Repeatable"),
+    status_filter: list[AssetStatus] | None = Query(None, alias="status", description="Repeatable"),
     is_active: bool | None = Query(None),
 ) -> AssetPage:
     query = AssetQuery(
         search=q,
         asset_type=asset_type,
         environment=environment,
-        criticality=criticality,
-        status=status_filter,
+        criticality=tuple(criticality or ()),
+        status=tuple(status_filter or ()),
         is_active=is_active,
         page=page,
         page_size=page_size,
@@ -89,6 +91,16 @@ def list_assets_endpoint(
         total=total,
         total_pages=total_pages,
     )
+
+
+@router.get(
+    "/summary",
+    response_model=AssetSummary,
+    summary="Aggregate asset counts for the dashboard",
+)
+def asset_summary_endpoint(db: Session = Depends(get_db)) -> AssetSummary:
+    # Declared before ``/{asset_id}`` so "summary" is not captured as a UUID path.
+    return AssetSummary.model_validate(get_asset_summary(db))
 
 
 @router.get(

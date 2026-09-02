@@ -2,13 +2,13 @@ import { Brand } from "@/components/Brand";
 import { MobileNav } from "@/components/shell/MobileNav";
 
 /**
- * Mobile-only header: the drawer trigger plus the brand. On `lg+` the sidebar
- * carries navigation, account and preferences, so this bar is hidden and the
- * content column starts at the top of the viewport.
+ * Mobile-only header: the drawer trigger plus the brand. It sits above the
+ * scrolling main pane (`AppShell` owns the scroll), so it stays put while the
+ * content scrolls. On `lg+` the rail carries navigation and this bar is hidden.
  */
 export function Topbar() {
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background/85 px-4 backdrop-blur lg:hidden">
+    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-sidebar px-4 lg:hidden">
       <MobileNav />
       <Brand />
     </header>

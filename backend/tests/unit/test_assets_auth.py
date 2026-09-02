@@ -11,6 +11,7 @@ FAKE_ID = "11111111-1111-1111-1111-111111111111"
 
 _REQUESTS = [
     ("get", BASE, None),
+    ("get", f"{BASE}/summary", None),
     ("get", f"{BASE}/{FAKE_ID}", None),
     ("post", BASE, {"name": "x", "asset_type": "Server", "environment": "Test",
                     "criticality": "Low", "status": "Offline"}),
@@ -41,5 +42,6 @@ def test_malformed_token_is_401(client_factory, method: str, path: str, body) ->
 def test_list_assets_openapi_is_documented(client_factory) -> None:
     schema = client_factory().get("/openapi.json").json()
     assert "/api/v1/assets" in schema["paths"]
+    assert "/api/v1/assets/summary" in schema["paths"]
     assert "/api/v1/assets/{asset_id}" in schema["paths"]
     assert "/api/v1/assets/{asset_id}/deactivate" in schema["paths"]

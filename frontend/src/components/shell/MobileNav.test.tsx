@@ -54,16 +54,18 @@ describe("MobileNav", () => {
     );
   });
 
-  it("opens the drawer with navigation plus language, theme and sign-out", async () => {
+  it("opens the drawer with the flat navigation plus theme and sign-out (no language switcher)", async () => {
     renderNav();
     await userEvent.click(screen.getByRole("button", { name: openTrigger }));
 
     const dialog = await screen.findByRole("dialog", { name: /navegación principal/i });
     expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeInTheDocument();
-    expect(screen.getByRole("group", { name: /cambiar idioma/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Assets" })).toBeInTheDocument();
+    expect(screen.queryByText("INFRASTRUCTURE")).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: /cambiar idioma/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /modo (claro|oscuro)/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /cerrar sesión/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^salir$/i })).toBeInTheDocument();
   });
 
   it("closes on Escape", async () => {

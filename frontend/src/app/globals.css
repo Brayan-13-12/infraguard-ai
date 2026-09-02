@@ -7,7 +7,12 @@
 
    Every value is a set of HSL channels (no `hsl(...)` wrapper) so Tailwind's
    `<alpha-value>` slot works: `bg-surface`, `bg-primary/10`, `text-muted-foreground`.
-   Components reference the tokens - never raw hex.
+   Components reference the tokens - never raw hex, never `dark:` variants.
+   Theming is a pure token swap driven by the `.dark` class on <html>.
+
+   Direction: an infrastructure operations console - crisp, technical, calm,
+   data-oriented. Dark is the primary identity (near-black cool surfaces, a
+   clean brand blue); light is fully supported and retuned from the same roles.
    --------------------------------------------------------------------------- */
 :root {
   --font-sans:
@@ -17,7 +22,7 @@
     ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", "Roboto Mono",
     Menlo, Consolas, "Liberation Mono", monospace;
 
-  /* Light theme */
+  /* Light theme -------------------------------------------------------------- */
   --background: 210 24% 97%;
   --foreground: 215 28% 14%;
 
@@ -38,35 +43,76 @@
   /* Mid-severity caution: a distinct amber/yellow between warning (orange) and
      success (green). Contrast on its own /14 tint matches the warning badge. */
   --caution: 41 92% 31%;
+  /* Informational accent - a cyan, deliberately distinct from the brand blue. */
+  --info: 199 89% 40%;
 
   --ring: 221 83% 53%;
 
   --shadow-color: 215 30% 20%;
+
+  /* Navigation chrome - a hair cooler / quieter than content surfaces so the
+     sidebar reads as a frame, not a card. */
+  --sidebar: 214 28% 98%;
+  --sidebar-border: 214 22% 90%;
+
+  /* Modal / drawer scrim. Used as `bg-overlay/60`. */
+  --overlay: 222 30% 16%;
+
+  /* Authentication split-screen brand panel. Deliberately theme-independent -
+     a deep, branded slate canvas in BOTH light and dark (enterprise split
+     login), so it is defined once and never overridden under `.dark`. */
+  --auth-panel: 224 46% 6%;
+  --auth-panel-foreground: 213 26% 93%;
+  --auth-panel-muted: 217 15% 62%;
+  --auth-panel-border: 220 24% 15%;
+
+  /* Categorical chart palette - 6 hues, readable on the surface token, spaced
+     for colour-vision deficiency. Criticality/status charts do NOT use these;
+     they reuse danger / warning / caution / success / info directly. */
+  --chart-1: 221 83% 53%;
+  --chart-2: 172 60% 34%;
+  --chart-3: 262 60% 55%;
+  --chart-4: 33 90% 44%;
+  --chart-5: 331 68% 50%;
+  --chart-6: 199 85% 41%;
 }
 
 .dark {
-  --background: 224 33% 6.5%;
-  --foreground: 210 22% 94%;
+  --background: 224 44% 5%;
+  --foreground: 213 26% 93%;
 
-  --surface: 222 22% 12%;
-  --surface-elevated: 222 20% 16%;
+  --surface: 223 30% 9%;
+  --surface-elevated: 223 24% 13%;
 
-  --border: 220 13% 28%;
-  --muted: 221 19% 18%;
-  --muted-foreground: 217 16% 66%;
+  --border: 221 18% 20%;
+  --muted: 223 22% 14%;
+  --muted-foreground: 218 14% 62%;
 
-  --primary: 217 84% 60%;
-  --primary-hover: 217 84% 68%;
-  --primary-foreground: 222 45% 9%;
+  --primary: 213 90% 62%;
+  --primary-hover: 213 92% 72%;
+  --primary-foreground: 224 47% 7%;
 
   --success: 152 46% 56%;
   --warning: 36 84% 60%;
   --danger: 0 72% 66%;
   --caution: 47 95% 59%;
+  --info: 195 85% 60%;
 
-  --ring: 217 90% 66%;
+  --ring: 213 92% 66%;
 
-  --shadow-color: 222 45% 3%;
+  --shadow-color: 224 60% 2%;
+
+  --sidebar: 224 42% 6.5%;
+  --sidebar-border: 221 18% 16%;
+
+  --overlay: 224 60% 2%;
+
+  --chart-1: 213 90% 62%;
+  --chart-2: 172 62% 48%;
+  --chart-3: 262 70% 68%;
+  --chart-4: 39 92% 58%;
+  --chart-5: 336 74% 64%;
+  --chart-6: 196 85% 58%;
 }
 
 @layer base {
@@ -107,6 +153,12 @@
 
   ::selection {
     background: hsl(var(--primary) / 0.22);
+  }
+
+  /* Tabular figures for dense data readouts (KPIs, tables, chart companions). */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
   }
 }
 

@@ -88,10 +88,11 @@ frontend/src/
   `Assets` / `Incidents` / `AI Assistant` / `Settings`), the `Dashboard` page
   heading, the dashboard module names, and the `Coming soon` marker - these are
   literals, not translation keys. `<LanguageSwitcher />` is a labelled `ES | EN`
-  button group.
+  button group. **(Superseded in §14.2: the switcher and the language preference
+  were removed - the visible UI is now Spanish-only.)**
 - **Theme:** `next-themes` (~3.5 KB, zero deps) still provides light / dark /
-  system with `localStorage` persistence, OS-preference on first visit, and an
-  inline pre-hydration script - **no flash, no mismatch**
+  system with `localStorage` persistence and an inline pre-hydration script -
+  **no flash, no mismatch** (see §14.1: **dark** became the first-visit default)
   (`<html suppressHydrationWarning>`, `darkMode: "class"`). The stored value is a
   non-sensitive UI preference - **auth data is never in `localStorage`**.
   `<ThemeToggle />` is now a **single contextual button**: it renders the icon of
@@ -616,7 +617,8 @@ endpoint authenticated); writes also `Depends(require_trusted_origin)`.
 
 | Method | Path | Notes | Codes |
 | --- | --- | --- | --- |
-| `GET` | `/api/v1/assets` | `page` (≥1), `page_size` (1-100, default 20), `q`, `asset_type`, `environment`, `criticality`, `status`, `is_active` | `200` / `401` / `422` |
+| `GET` | `/api/v1/assets` | `page` (≥1), `page_size` (1-100, default 20), `q`, `asset_type`, `environment`, `criticality`\*, `status`\*, `is_active` | `200` / `401` / `422` |
+| `GET` | `/api/v1/assets/summary` | aggregate counts; declared **before** `/{id}` so "summary" isn't parsed as a UUID | `200` / `401` / `503` |
 | `GET` | `/api/v1/assets/{id}` | | `200` / `401` / `404` |
 | `POST` | `/api/v1/assets` | `AssetCreate` (`extra="forbid"`) | `201` / `401` / `403` / `422` |
 | `PATCH` | `/api/v1/assets/{id}` | `AssetUpdate` (`extra="forbid"`, no `is_active`) - only sent fields change | `200` / `401` / `403` / `404` / `422` |
@@ -633,6 +635,18 @@ client cannot request an unbounded result set.
 expression API. The term's `%` / `_` / `\` are escaped so they match literally.
 Contains-search is not index-accelerated yet - a trigram / GIN index is a future
 optimisation, noted in the limitations.
+
+\* **Multi-value filters** (Product-Experience milestone): `criticality` and
+`status` are repeatable query params. `AssetQuery` holds them as tuples and
+`_conditions` emits `col.in_(...)`; a single value still produces `IN (one)`, so
+every existing single-value URL is unchanged.
+
+**Summary** (`GET /api/v1/assets/summary` → `AssetSummary`): `get_asset_summary`
+runs one `count(*) / count(*) FILTER (WHERE is_active)` query plus one `GROUP BY`
+per catalog dimension - a handful of aggregates, never dozens of list calls. The
+schema fills every catalog key (`0` when absent) so the Dashboard renders a
+stable KPI/chart set. Read-only: no model change, no migration. A DB failure is
+sanitised to a generic `503` by the global `OperationalError` handler.
 
 ### 13.4 Deactivation - decision
 
@@ -675,7 +689,189 @@ depend on colour. The `Assets` nav label, like all module names, stays English.
 - No bulk operations, CSV import/export, or audit log.
 - No optimistic-concurrency token on `PATCH` (last write wins).
 
-## 14. Future direction
+## 14. Product Experience (visual direction, Dashboard, foundations)
+
+The first product-experience pass. No security surface changed (auth cookie, JWT
+validation, CORS, CSRF origin check, production fail-safety, soft deactivation,
+integration DB guard are all untouched; **no auth data in `localStorage`**).
+
+### 14.1 Visual direction & theming
+
+- Direction: an **infrastructure operations console** - crisp, technical, calm,
+  dense but readable. The semantic-token architecture from v0.3 is kept and
+  retuned **centrally** (no `dark:` variants, no raw hex). New tokens:
+  `--sidebar` / `--sidebar-border` (nav chrome), `--info` (a cyan, distinct from
+  the brand blue - `Badge`/`Alert` `info` no longer borrow `--primary`),
+  `--overlay` (modal scrim), `--chart-1..6` (categorical palette; the criticality
+  chart instead reuses `--danger/--warning/--caution/--success` so its colour
+  matches the badges) and `--auth-panel*` (the split-login brand canvas -
+  deliberately theme-independent, defined only on `:root`).
+- **Dark is the default theme** (`defaultTheme="dark"`) - it is InfraGuard's
+  primary identity. Light is fully retained. An explicit user choice still
+  persists (`localStorage` `theme`) and wins on the next visit.
+
+### 14.2 Spanish-only UI
+
+The visible UI is Spanish only. `<LanguageSwitcher />`, the language
+`localStorage` preference and all language controls were removed; `provider.tsx`
+is now stateless (`useTranslation()` → `{ language: "es", t }`). The typed i18n
+layer stays: `es.ts` is the source of truth, `en.ts` is still structurally
+validated against it, `<html lang="es">` is authoritative, and locale infra for
+dates/numbers is kept. English product names are unchanged (`InfraGuard AI`,
+`Dashboard`, `Assets`, `Incidents`, `AI Assistant`, `Settings`).
+
+### 14.3 Navigation & shell
+
+`NAV_ITEMS` is a **single flat list** - Dashboard, Assets, Incidents, AI
+Assistant, Settings - with **no visible section headings**. The active item gets
+a primary-tinted fill, primary text/icon and a left accent bar
+(`aria-current="page"`). Future items are `aria-disabled`, non-navigable, with a
+quiet lock marker and a "Próximamente" tooltip (no `· soon` text, no badges).
+
+The rail is **collapsible** on desktop (~256px ↔ ~68px, 200ms width transition,
+`aria-expanded` on the toggle, choice persisted in `localStorage` - a
+non-sensitive UI preference). Collapsed shows icons only; the label stays the
+accessible name (`aria-label` + `title`) plus a hover/focus tooltip, and the
+logout icon opens a `ConfirmDialog` instead of the inline step. Mobile always
+uses the full drawer, never the icon rail.
+
+The footer is a compact identity row (avatar + email + theme toggle) over the
+confirmation-gated **"Salir"** (`LogoutButton` - the safe two-step / dialog is
+unchanged; only the visible label changed from "Cerrar sesión").
+
+**Scroll architecture:** `AppShell` is `h-[100dvh] overflow-hidden`, so the
+document/body never scrolls. The rail is a full-height flex child (`h-[100dvh]`,
+`shrink-0`, brand + footer `shrink-0`, only the nav scrolls) and the **main pane**
+is the scroll container (`overflow-y-auto`, `data-scroll-lock`). The rail is
+therefore visually continuous top-to-bottom on any page length, and `Overlay`
+locks both the body and `[data-scroll-lock]` when a modal opens.
+
+### 14.4 Overlay / toast / skeleton foundations
+
+- `components/ui/overlay/` - `Overlay` (headless: portal, `--overlay` scrim,
+  optional blur, Escape + backdrop dismissal, focus-in + **trap** + **restore to
+  trigger**, scroll lock, `role="dialog"`/`aria-modal`/`aria-labelledby`,
+  reduced-motion) → `Dialog`, `Drawer`, `ConfirmDialog`. Generalised from the
+  proven MobileNav behaviour; the mobile nav and the Asset drawers (§14.8) use
+  it. `Overlay` keeps an **overlay stack** so only the top overlay reacts to
+  Escape / Tab (a `ConfirmDialog` over a `Drawer` doesn't close the drawer).
+- `components/ui/toast/` - `<Toaster>` (mounted once in the root layout) + a
+  module-level `toast()` / `useToast()`. No library. Top-right (desktop) /
+  bottom-center (mobile), `role="status"` or `"alert"`, auto-dismiss with
+  pause-on-hover, manual dismiss, reduced-motion.
+- `components/ui/Skeleton.tsx` - token-based, reduced-motion aware; used for the
+  Dashboard loading state.
+
+### 14.5 Dashboard
+
+`DashboardOverview` issues **one** request (`GET /api/v1/assets/summary`) and
+renders:
+
+- a **KPI row** (Total / Critical / Operational / Degraded+Offline / Maintenance
+  / Inactive) - counts only from the summary, tabular figures, a small semantic
+  dot as the only colour, subtle hover lift, each a real `Link` into the matching
+  Assets filter;
+- **one** primary chart - `CriticalityChart` ("Activos por criticidad"), a donut
+  with the total in its centre. Wraps **Recharts** (the only chart dependency,
+  lazy-loaded via `next/dynamic({ ssr: false })` so it stays out of the shared
+  bundle) paired with a `ChartDataTable`: a real `<table>` with category / count
+  / percentage and keyboard drill-down links. Semantic severity colours only;
+- `OperationalSummary` ("Estado actual") - **not** a second chart: current status
+  rows with thin proportional bars + two honest "top" insights (entorno principal
+  / tipo predominante), so environment/type data is not lost;
+- **recently updated assets** - the existing list endpoint, `page_size=5`, rows
+  link to the existing detail route (no drawer);
+- system health as a compact `● Sistema operativo` cue that opens a small
+  `Dialog` with the real per-component status.
+
+**"Actualizar" is real:** it refetches the summary and, via a `refreshToken`
+prop, the recent-assets list and the health check. The button shows a loading
+state, a `"Actualizado HH:MM"` timestamp is kept, and a refresh failure surfaces
+as a toast without discarding the current board.
+
+**Depth / hierarchy:** the criticality chart is a level-1 surface (`elevated`,
+left accent rail, faint primary halo); KPI + operational cards are level-2
+(hover lift, border/shadow transition); the recent-assets table is level-3. Card
+headers follow the console pattern (icon chip + compact title). Segment ↔ legend
+cross-highlight on the donut; status rows highlight + reveal an arrow on hover.
+
+**Visual-noise reduction:** the status donut, environment donut and
+assets-by-type bar were **removed** from the Dashboard (too many charts, too
+colourful). `DonutChart` / `HorizontalBarChart` / `ChartDataTable` remain as
+reusable primitives for future analytics screens. The old `PlatformModules` /
+`AccountCard` panels stay parked for a future Settings screen. Drill-down URLs
+use the **verified** `AssetsBrowser` parameter names (`criticality`, `status`,
+`state`).
+
+### 14.6 Assets active-filter chips
+
+`/assets` gains a URL-driven chip row (`Criticidad: Crítica ×`, … + `Limpiar
+todo`). URL search params stay the source of truth (`AssetsBrowser` owns them);
+removing a chip updates the filter state which is written back to the URL.
+Multi-value filters render one removable chip per value. The existing filter
+selects are unchanged (single-select; they show the first of several values).
+
+### 14.7 Authentication experience
+
+`/login` and `/register` use an **enterprise split** `AuthLayout` at `lg+`
+(~55/45): a deep, branded slate panel on the left (brand, the Spanish product
+statement over a faint primary glow, three restrained capability highlights -
+inventory visibility, operational intelligence, AI-assisted analysis - and a
+SVG node-topology backdrop where one or two nodes carry a very slow expanding
+halo, no imagery, no gradients, **no fake stats or testimonials**). The
+contextual theme toggle lives **inside the auth card header** (not floating at
+page level). Below `lg` the panel collapses entirely: brand + short tagline +
+card, single column, no horizontal overflow. `AuthForm` and the whole
+authentication flow (validation, HttpOnly-cookie handling, redirects) are
+**unchanged**.
+
+### 14.8 Asset route-aware drawers
+
+Navigating **from `/assets`** opens Asset detail / create / edit in a right-side
+drawer over the inventory (the list stays mounted behind it), via Next.js
+**Parallel + Intercepting Routes**.
+
+```
+app/(app)/                     layout.tsx = AuthenticatedShell (RequireAuth + AppShell), one place
+  dashboard/
+  assets/
+    layout.tsx                 → {children}{modal}
+    page.tsx                   → AssetsBrowser
+    @modal/
+      default.tsx              → null   (the list, or any hard load)
+      (.)[id]/page.tsx         → <AssetDetailDrawer/>
+      (.)[id]/edit/page.tsx    → <AssetEditDrawer/>   (replaces the detail slot; no modal-on-modal)
+      (.)new/page.tsx          → <AssetCreateDrawer/>
+    [id]/page.tsx · [id]/edit/page.tsx · new/page.tsx   → full-page fallbacks
+```
+
+- **Route group `(app)`** (URL-invisible) centralises `RequireAuth + AppShell` -
+  authenticated pages no longer repeat it. Public URLs are unchanged.
+- **Deep link / refresh** of `/assets/[id]`, `/assets/new`, `/assets/[id]/edit`
+  renders a **full page** (interception is client-navigation only). `@modal`
+  needs a `default.tsx`; on a hard load it resolves to `null` while `children`
+  resolves the real nested page.
+- Close / backdrop / Escape → `router.back()` (`hooks/useCloseDrawer`), so
+  `/assets?criticality=Critical&page=2` is restored **exactly** from history -
+  filters / page / search are never reset.
+- **Shared implementation, no duplicated logic:** `AssetDetailLoader` is the one
+  fetch/state machine; `AssetOverview` / `AssetDescription` /
+  `AssetLifecycleButton` (deactivate/reactivate via `ConfirmDialog` + toast) are
+  shared by the full page and the drawer; `AssetForm` is used verbatim in both.
+  `AssetDrawerShell` is the drawer chrome (full-width mobile / ~544px desktop,
+  `shrink-0` header + close, scroll body, sticky footer, safe-area padding).
+- **Toasts** on success (created / updated / deactivated / reactivated); a drawer
+  action calls `notifyAssetsChanged()` (`lib/assetsRefresh.ts`) and
+  `AssetsBrowser` refetches without losing state; a freshly created row is
+  briefly highlighted.
+- `AssetsTable` rows are a **stretched name-link** (whole row → detail, keyboard
+  via the focused link, no nested interactive) with a hover/focus **Edit**
+  quick-action.
+- Loading → skeleton (not a blank panel); load failure → Retry / Close; missing
+  asset → not-found. Focus: detail drawer focuses the close control; create/edit
+  focus the name field (`Overlay` `initialFocus`).
+
+## 15. Future direction
 
 Later, dedicated feature branches are expected to add:
 

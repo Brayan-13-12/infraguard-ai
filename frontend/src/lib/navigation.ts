@@ -12,8 +12,8 @@ export type NavStatus = "active" | "soon";
 
 export interface NavItem {
   /**
-   * Product / module name - always English, never translated (these are proper
-   * nouns for the platform's areas, consistent across locales).
+   * Product / module name - always English, never translated (proper nouns for
+   * the platform's areas, consistent across locales).
    */
   label: string;
   href: string;
@@ -22,17 +22,15 @@ export interface NavItem {
 }
 
 /**
- * Primary navigation. Dashboard and Assets are real routes; Incidents and AI
- * Assistant are shown as disabled "Coming soon" items so the shell reads as
- * intentional without faking functionality.
+ * A single, flat navigation list - no visible section headings. Dashboard and
+ * Assets are real routes; Incidents, AI Assistant and Settings are shown as
+ * `aria-disabled` (not navigable) with a quiet lock marker + "Próximamente"
+ * tooltip.
  */
-export const PRIMARY_NAV: NavItem[] = [
+export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutIcon, status: "active" },
   { label: "Assets", href: "/assets", icon: BoxIcon, status: "active" },
   { label: "Incidents", href: "/incidents", icon: ShieldIcon, status: "soon" },
   { label: "AI Assistant", href: "/ai", icon: SparklesIcon, status: "soon" },
-];
-
-export const SECONDARY_NAV: NavItem[] = [
   { label: "Settings", href: "/settings", icon: SettingsIcon, status: "soon" },
 ];

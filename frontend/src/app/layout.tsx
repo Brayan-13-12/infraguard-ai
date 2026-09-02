@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 
 import { AuthProvider } from "@/components/AuthProvider";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
+import { Toaster } from "@/components/ui/toast";
 import { LanguageProvider } from "@/i18n";
 import "./globals.css";
 
@@ -18,7 +19,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#f4f6f9" },
-    { media: "(prefers-color-scheme: dark)", color: "#0f1420" },
+    { media: "(prefers-color-scheme: dark)", color: "#080b12" },
   ],
 };
 
@@ -31,6 +32,7 @@ export default function RootLayout({
         <ThemeProvider>
           <LanguageProvider>
             <AuthProvider>{children}</AuthProvider>
+            <Toaster />
           </LanguageProvider>
         </ThemeProvider>
       </body>

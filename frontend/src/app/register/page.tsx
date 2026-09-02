@@ -24,7 +24,7 @@ export default function RegisterPage() {
     <AuthLayout>
       {registeredEmail ? (
         <div className="motion-safe:animate-fade-in-up">
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">
+          <h1 className="pr-10 text-xl font-semibold tracking-tight text-foreground">
             {t("auth.registeredTitle")}
           </h1>
           <Alert tone="success" className="mt-4">

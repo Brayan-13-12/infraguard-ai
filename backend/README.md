@@ -43,7 +43,8 @@ requirements*.txt    # fully-resolved, hash-pinned locks (generated)
 | `POST` | `/api/v1/auth/login`   | Authenticate; sets the `infraguard_access` HttpOnly cookie. | `200` / `401` / `429` |
 | `POST` | `/api/v1/auth/logout`  | Clear the auth cookie. | `200` |
 | `GET`  | `/api/v1/auth/me`      | The authenticated user's public profile. | `200` / `401` / `403` |
-| `GET`  | `/api/v1/assets`       | List assets (paginated, `q` search, catalog + `is_active` filters). **Auth.** | `200` / `401` / `422` |
+| `GET`  | `/api/v1/assets`       | List assets (paginated, `q` search, catalog + `is_active` filters; `criticality` / `status` are repeatable → `IN (...)`). **Auth.** | `200` / `401` / `422` |
+| `GET`  | `/api/v1/assets/summary` | Aggregate counts (`total` / `active` / `inactive` + `by_criticality` / `by_status` / `by_environment` / `by_type`). Read-only. **Auth.** | `200` / `401` / `503` |
 | `POST` | `/api/v1/assets`       | Create an asset. **Auth + CSRF.** | `201` / `401` / `403` / `422` |
 | `GET`  | `/api/v1/assets/{id}`  | Asset detail. **Auth.** | `200` / `401` / `404` |
 | `PATCH`| `/api/v1/assets/{id}`  | Partial content update (no `is_active`). **Auth + CSRF.** | `200` / `401` / `403` / `404` / `422` |
@@ -71,7 +72,13 @@ recurs legitimately across environments.
   (`items/page/page_size/total/total_pages`), `page_size` capped at 100, ordering
   `updated_at DESC, id DESC`. Search is an **escaped** `ILIKE '%term%'` over
   `name` / `hostname` / `owner` / `ip_address`, built with the SQLAlchemy
-  expression API - never string-concatenated SQL.
+  expression API - never string-concatenated SQL. `criticality` / `status`
+  accept repeated query values (`AssetQuery` holds tuples → `col.in_(...)`); a
+  single value is unchanged, so existing URLs keep working.
+- **Summary** (`get_asset_summary`): a handful of `GROUP BY` / `count(*) FILTER`
+  queries (not dozens of list calls); `AssetSummary` fills every catalog key,
+  reporting `0` for absent values. Read-only - no model or schema migration.
+  DB errors are sanitised to a generic `503` by the global handlers.
 - **Deactivation - decision:** no `DELETE`. Lifecycle is the dedicated
   `POST /{id}/deactivate` + `/reactivate` pair (idempotent, explicit,
   auditable); `PATCH` stays content-only. A deactivated asset is still

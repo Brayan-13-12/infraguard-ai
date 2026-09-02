@@ -158,5 +158,21 @@ class AssetPage(BaseModel):
     total_pages: int = Field(ge=0)
 
 
+class AssetSummary(BaseModel):
+    """Aggregate inventory counts for the Dashboard.
+
+    Read-only, derived entirely from the ``assets`` table. Every catalog key is
+    present in each breakdown even when its count is zero.
+    """
+
+    total: int = Field(ge=0)
+    active: int = Field(ge=0)
+    inactive: int = Field(ge=0)
+    by_criticality: dict[str, int]
+    by_status: dict[str, int]
+    by_environment: dict[str, int]
+    by_type: dict[str, int]
+
+
 class MessageResponse(BaseModel):
     detail: str

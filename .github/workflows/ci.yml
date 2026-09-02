@@ -1,8 +1,8 @@
 name: CI
 
 # Validation for InfraGuard AI: lint + unit/integration tests for both apps, and
-# a Docker Compose build + migration + smoke test (health and authentication) of
-# the documented delivery path.
+# a Docker Compose build + migration + smoke test (health, authentication and the
+# assets API incl. GET /api/v1/assets/summary) of the documented delivery path.
 #
 # Out of scope (dedicated later phases): image publishing, deployment, Kubernetes,
 # security scanning, release automation.
@@ -186,6 +186,15 @@ jobs:
           echo "list finds it via search -> total >= 1"
           curl -s -b "$JAR" "$API/assets?q=ci-web-01" | python3 -c "import sys,json; assert json.load(sys.stdin)['total'] >= 1"
 
+          echo "multi-value status filter -> IN (...)"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$API/assets?status=Degraded&status=Offline")" = "200"
+
+          echo "summary (authenticated) -> shape + every catalog key"
+          curl -s -b "$JAR" "$API/assets/summary" | python3 -c "import sys,json; d=json.load(sys.stdin); assert set(d)=={'total','active','inactive','by_criticality','by_status','by_environment','by_type'}; assert set(d['by_status'])=={'Operational','Degraded','Maintenance','Offline'}; assert d['total']>=1"
+
+          echo "summary unauthenticated -> 401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$API/assets/summary")" = "401"
+
           echo "get detail -> 200"
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$API/assets/$ID")" = "200"
 
@@ -213,6 +222,7 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/healthz)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/login)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/assets)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/dashboard)" = "200"
 
       - name: Dump logs on failure
         if: failure()

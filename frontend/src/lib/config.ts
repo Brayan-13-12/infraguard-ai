@@ -26,6 +26,9 @@ export const AUTH_ENDPOINTS = {
 /** Assets / infrastructure inventory API. */
 export const ASSETS_ENDPOINT = `${v1}/assets`;
 
+/** Aggregate asset counts for the dashboard. */
+export const ASSETS_SUMMARY_ENDPOINT = `${v1}/assets/summary`;
+
 /** Asset list pagination defaults - mirror the backend (app/schemas/asset.py). */
 export const ASSETS_PAGE_SIZE = 20;
 export const ASSETS_MAX_PAGE_SIZE = 100;

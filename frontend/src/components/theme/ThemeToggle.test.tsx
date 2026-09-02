@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
-import { setMatchMedia } from "@/test/matchMedia";
 
 function renderToggle() {
   return render(
@@ -19,49 +18,42 @@ const toDark = /modo oscuro/i;
 const toLight = /modo claro/i;
 
 describe("ThemeToggle", () => {
-  it("offers the opposite mode as a single labelled button", async () => {
+  it("starts a first-time visitor in dark and offers light as a single labelled button", async () => {
     renderToggle();
-    // System resolves to light in tests -> the button switches you to dark.
-    const button = await screen.findByRole("button", { name: toDark });
+    // defaultTheme is "dark" -> the button switches you to light.
+    const button = await screen.findByRole("button", { name: toLight });
     expect(button).toBeInTheDocument();
+    expect(html()).toHaveClass("dark");
     expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
   });
 
-  it("switches to dark and then flips its label to offer light", async () => {
+  it("switches to light and then flips its label to offer dark", async () => {
     renderToggle();
-    await userEvent.click(await screen.findByRole("button", { name: toDark }));
+    await userEvent.click(await screen.findByRole("button", { name: toLight }));
 
-    await waitFor(() => expect(html()).toHaveClass("dark"));
-    expect(await screen.findByRole("button", { name: toLight })).toBeInTheDocument();
+    await waitFor(() => expect(html()).not.toHaveClass("dark"));
+    expect(await screen.findByRole("button", { name: toDark })).toBeInTheDocument();
   });
 
-  it("switches back to light", async () => {
+  it("switches back to dark", async () => {
     renderToggle();
-    await userEvent.click(await screen.findByRole("button", { name: toDark }));
-    await waitFor(() => expect(html()).toHaveClass("dark"));
-
     await userEvent.click(await screen.findByRole("button", { name: toLight }));
     await waitFor(() => expect(html()).not.toHaveClass("dark"));
+
+    await userEvent.click(await screen.findByRole("button", { name: toDark }));
+    await waitFor(() => expect(html()).toHaveClass("dark"));
   });
 
   it("persists an explicit choice to localStorage", async () => {
     renderToggle();
-    await userEvent.click(await screen.findByRole("button", { name: toDark }));
-    await waitFor(() => expect(window.localStorage.getItem("theme")).toBe("dark"));
+    await userEvent.click(await screen.findByRole("button", { name: toLight }));
+    await waitFor(() => expect(window.localStorage.getItem("theme")).toBe("light"));
   });
 
   it("restores a persisted preference on the next mount", async () => {
-    window.localStorage.setItem("theme", "dark");
+    window.localStorage.setItem("theme", "light");
     renderToggle();
-    await waitFor(() => expect(html()).toHaveClass("dark"));
-    expect(await screen.findByRole("button", { name: toLight })).toBeInTheDocument();
-  });
-
-  it("follows the OS preference on first visit (nothing persisted)", async () => {
-    setMatchMedia(true); // OS prefers dark
-    renderToggle();
-    await waitFor(() => expect(html()).toHaveClass("dark"));
-    // Dark is active -> the button now offers light.
-    expect(await screen.findByRole("button", { name: toLight })).toBeInTheDocument();
+    await waitFor(() => expect(html()).not.toHaveClass("dark"));
+    expect(await screen.findByRole("button", { name: toDark })).toBeInTheDocument();
   });
 });

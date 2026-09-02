@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.models.asset import DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH
-from app.schemas.asset import AssetCreate, AssetRead, AssetUpdate
+from app.schemas.asset import AssetCreate, AssetRead, AssetSummary, AssetUpdate
 
 VALID = {
     "name": "web-01",
@@ -129,3 +129,38 @@ def test_asset_read_exposes_no_unexpected_fields() -> None:
         "created_at",
         "updated_at",
     }
+
+
+def test_asset_summary_shape() -> None:
+    summary = AssetSummary(
+        total=3,
+        active=2,
+        inactive=1,
+        by_criticality={"Critical": 1, "High": 0, "Medium": 2, "Low": 0},
+        by_status={"Operational": 3, "Degraded": 0, "Maintenance": 0, "Offline": 0},
+        by_environment={"Production": 3, "Staging": 0, "Development": 0, "Test": 0},
+        by_type={"Server": 3},
+    )
+    assert set(AssetSummary.model_fields) == {
+        "total",
+        "active",
+        "inactive",
+        "by_criticality",
+        "by_status",
+        "by_environment",
+        "by_type",
+    }
+    assert summary.by_criticality["Medium"] == 2
+
+
+def test_asset_summary_rejects_negative_totals() -> None:
+    with pytest.raises(ValidationError):
+        AssetSummary(
+            total=-1,
+            active=0,
+            inactive=0,
+            by_criticality={},
+            by_status={},
+            by_environment={},
+            by_type={},
+        )

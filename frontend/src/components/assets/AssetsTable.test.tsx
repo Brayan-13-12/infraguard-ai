@@ -1,15 +1,22 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { AssetsTable } from "@/components/assets/AssetsTable";
-import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { LanguageProvider } from "@/i18n";
 import type { Asset } from "@/types/asset";
 
 vi.mock("next/link", () => ({
-  default: ({ children, href }: { children: React.ReactNode; href: string }) => (
-    <a href={href}>{children}</a>
+  default: ({
+    children,
+    href,
+    ...rest
+  }: {
+    children: React.ReactNode;
+    href: string;
+  }) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
   ),
 }));
 
@@ -63,21 +70,38 @@ describe("AssetsTable", () => {
     }
   });
 
-  it("re-translates the catalog when the language switches to English", async () => {
+  it("translates catalog values to Spanish for display while linking English values", () => {
+    renderTable([make({ asset_type: "Database", criticality: "Low" })]);
+    expect(screen.getAllByText("Base de datos").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Baja").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Database")).not.toBeInTheDocument();
+  });
+
+  it("stretches the name link over the whole row (detail) and offers an edit quick action", () => {
+    renderTable([make({ id: "x", name: "web-01" })]);
+    // The row-detail link (stretched) + a separate edit link.
+    const [detail] = screen.getAllByRole("link", { name: "web-01" });
+    expect(detail).toHaveAttribute("href", "/assets/x");
+    expect(detail!.className).toMatch(/after:inset-0/);
+
+    const [edit] = screen.getAllByRole("link", { name: /editar: web-01/i });
+    expect(edit).toHaveAttribute("href", "/assets/x/edit");
+  });
+
+  it("highlights the freshly created row when highlightId matches", () => {
     render(
       <LanguageProvider>
-        <LanguageSwitcher />
-        <AssetsTable assets={[make({ asset_type: "Database", criticality: "Low" })]} />
+        <AssetsTable
+          assets={[make({ id: "new-1", name: "created" }), make({ id: "old", name: "old-01" })]}
+          highlightId="new-1"
+        />
       </LanguageProvider>,
     );
-    expect(screen.getAllByText("Base de datos").length).toBeGreaterThan(0);
-
-    await userEvent.click(screen.getByRole("button", { name: "English" }));
-
-    await waitFor(() =>
-      expect(screen.getAllByText("Database").length).toBeGreaterThan(0),
-    );
-    expect(screen.getAllByText("Low").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Base de datos")).not.toBeInTheDocument();
+    const highlighted = screen
+      .getAllByRole("row")
+      .find((r) => within(r).queryByText("created"))!;
+    const plain = screen.getAllByRole("row").find((r) => within(r).queryByText("old-01"))!;
+    expect(highlighted.className).toContain("bg-primary/[0.06]");
+    expect(plain.className).not.toContain("bg-primary/[0.06]");
   });
 });

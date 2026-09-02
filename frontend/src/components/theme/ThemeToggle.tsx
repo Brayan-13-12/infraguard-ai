@@ -11,9 +11,9 @@ import { cn } from "@/lib/cn";
  * Single contextual light/dark toggle.
  *
  * The icon shows the mode you switch *to*: a sun while dark is active, a moon
- * while light is active. "System" is never shown - first visit still follows the
- * OS preference internally (next-themes `defaultTheme="system"`), and the first
- * explicit tap persists a concrete `light` / `dark` choice.
+ * while light is active. "System" is never shown - a first-time visitor starts
+ * in dark (next-themes `defaultTheme="dark"`), and the first explicit tap
+ * persists a concrete `light` / `dark` choice that wins on the next visit.
  *
  * Accessibility: a real `<button>` (Space/Enter, visible focus ring) whose
  * `aria-label` and `title` track the action. A stable, inert placeholder renders

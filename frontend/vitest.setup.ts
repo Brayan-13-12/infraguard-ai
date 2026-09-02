@@ -5,6 +5,16 @@ import { afterEach, beforeEach } from "vitest";
 
 import { setMatchMedia } from "@/test/matchMedia";
 
+// jsdom has no ResizeObserver; Recharts' ResponsiveContainer needs one.
+if (!("ResizeObserver" in globalThis)) {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverStub;
+}
+
 beforeEach(() => {
   setMatchMedia(false);
   try {

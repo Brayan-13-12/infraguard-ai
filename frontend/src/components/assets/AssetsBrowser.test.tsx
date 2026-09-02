@@ -4,14 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AssetsBrowser } from "@/components/assets/AssetsBrowser";
 import { LanguageProvider } from "@/i18n";
+import { notifyAssetsChanged } from "@/lib/assetsRefresh";
 import * as assetService from "@/services/assets";
 import type { Asset, AssetPage } from "@/types/asset";
 
 const replace = vi.fn();
+let mockSearchParams = new URLSearchParams("");
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace, push: vi.fn() }),
   usePathname: () => "/assets",
-  useSearchParams: () => new URLSearchParams(""),
+  useSearchParams: () => mockSearchParams,
 }));
 vi.mock("next/link", () => ({
   default: ({ children, href }: { children: React.ReactNode; href: string }) => (
@@ -53,7 +55,10 @@ function renderBrowser() {
   );
 }
 
-beforeEach(() => replace.mockReset());
+beforeEach(() => {
+  replace.mockReset();
+  mockSearchParams = new URLSearchParams("");
+});
 afterEach(() => vi.restoreAllMocks());
 
 describe("AssetsBrowser", () => {
@@ -143,5 +148,91 @@ describe("AssetsBrowser", () => {
     });
     renderBrowser();
     expect(await screen.findByText("7 activos")).toBeInTheDocument();
+  });
+
+  it("refetches when a drawer action fires notifyAssetsChanged, keeping the active filter", async () => {
+    mockSearchParams = new URLSearchParams("criticality=Critical&page=2");
+    const spy = vi
+      .spyOn(assetService, "listAssets")
+      .mockResolvedValue({ ok: true, data: page([asset({})], { total: 5, page: 2 }) });
+
+    renderBrowser();
+    await screen.findAllByRole("link", { name: "web-01" });
+    await waitFor(() =>
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({ criticality: ["Critical"], page: 2 }),
+      ),
+    );
+
+    const callsBefore = spy.mock.calls.length;
+    notifyAssetsChanged();
+
+    await waitFor(() => expect(spy.mock.calls.length).toBeGreaterThan(callsBefore));
+    // The refetch keeps the same filter + page (state is not reset).
+    expect(spy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ criticality: ["Critical"], page: 2 }),
+    );
+  });
+});
+
+describe("AssetsBrowser - active filter chips", () => {
+  it("renders one removable chip per multi-value URL param and passes them to the service", async () => {
+    mockSearchParams = new URLSearchParams("criticality=Critical&criticality=High");
+    const spy = vi
+      .spyOn(assetService, "listAssets")
+      .mockResolvedValue({ ok: true, data: page([asset({})]) });
+
+    renderBrowser();
+    await screen.findAllByRole("link", { name: "web-01" });
+
+    expect(
+      await screen.findByRole("button", { name: /quitar filtro: criticidad: crítica/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /quitar filtro: criticidad: alta/i }),
+    ).toBeInTheDocument();
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ criticality: ["Critical", "High"] }),
+    );
+  });
+
+  it("removes a single chip and keeps the rest", async () => {
+    mockSearchParams = new URLSearchParams("criticality=Critical&criticality=High");
+    vi.spyOn(assetService, "listAssets").mockResolvedValue({
+      ok: true,
+      data: page([asset({})]),
+    });
+
+    renderBrowser();
+    await screen.findByRole("button", { name: /quitar filtro: criticidad: crítica/i });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /quitar filtro: criticidad: crítica/i }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: /quitar filtro: criticidad: crítica/i }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.getByRole("button", { name: /quitar filtro: criticidad: alta/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("clears every chip with 'Limpiar todo'", async () => {
+    mockSearchParams = new URLSearchParams("type=Server&criticality=Critical");
+    vi.spyOn(assetService, "listAssets").mockResolvedValue({
+      ok: true,
+      data: page([asset({})]),
+    });
+
+    renderBrowser();
+    await userEvent.click(await screen.findByRole("button", { name: /limpiar todo/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /quitar filtro/i })).not.toBeInTheDocument(),
+    );
   });
 });
