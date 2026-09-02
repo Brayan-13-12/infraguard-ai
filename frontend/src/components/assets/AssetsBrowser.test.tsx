@@ -72,6 +72,15 @@ describe("AssetsBrowser", () => {
     expect(await screen.findAllByRole("link", { name: "billing-db" })).not.toHaveLength(0);
   });
 
+  it("requests exactly 20 rows per page (server-side pagination)", async () => {
+    const spy = vi
+      .spyOn(assetService, "listAssets")
+      .mockResolvedValue({ ok: true, data: page([asset({})]) });
+    renderBrowser();
+    await screen.findAllByRole("link", { name: "web-01" });
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ pageSize: 20, page: 1 }));
+  });
+
   it("renders the empty state with a create CTA when there are no assets", async () => {
     vi.spyOn(assetService, "listAssets").mockResolvedValue({ ok: true, data: page([]) });
     renderBrowser();

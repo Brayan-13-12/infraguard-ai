@@ -6,3 +6,5 @@ export { Drawer } from "./Drawer";
 export type { DrawerProps } from "./Drawer";
 export { ConfirmDialog } from "./ConfirmDialog";
 export type { ConfirmDialogProps } from "./ConfirmDialog";
+export { WorkspaceDialog } from "./WorkspaceDialog";
+export type { WorkspaceDialogProps } from "./WorkspaceDialog";

@@ -42,6 +42,25 @@ export const ASSET_LIMITS = {
   description: 2000,
 } as const;
 
+/** Incidents / incident management API. */
+export const INCIDENTS_ENDPOINT = `${v1}/incidents`;
+
+/** Aggregate incident counts for the dashboard. */
+export const INCIDENTS_SUMMARY_ENDPOINT = `${v1}/incidents/summary`;
+
+/** Incident list pagination default - mirrors the backend (app/schemas/incident.py).
+ *  Denser rows than assets, so 15 per page instead of 20. */
+export const INCIDENTS_PAGE_SIZE = 15;
+
+/** Incident field length caps - mirror the backend model (app/models/incident.py). */
+export const INCIDENT_LIMITS = {
+  title: 200,
+  owner: 200,
+  description: 5000,
+  comment: 2000,
+  maxAssetLinks: 200,
+} as const;
+
 /** Password policy - mirrors the backend (app/core/config.py). */
 export const PASSWORD_MIN_LENGTH = 12;
 export const PASSWORD_MAX_LENGTH = 128;

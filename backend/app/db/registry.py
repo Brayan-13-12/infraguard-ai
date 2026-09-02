@@ -6,6 +6,6 @@ from test fixtures that build the schema.
 from __future__ import annotations
 
 from app.db.base import Base
-from app.models import Asset, User
+from app.models import Asset, Incident, IncidentAsset, IncidentEvent, User
 
-__all__ = ["Asset", "Base", "User"]
+__all__ = ["Asset", "Base", "Incident", "IncidentAsset", "IncidentEvent", "User"]

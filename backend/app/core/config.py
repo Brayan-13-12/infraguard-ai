@@ -101,7 +101,12 @@ class Settings(BaseSettings):
     # when ENVIRONMENT=production (see _enforce_production_safety).
     JWT_SECRET: str = "dev-insecure-jwt-secret-change-me"
     JWT_ALGORITHM: Literal["HS256"] = "HS256"
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=15, gt=0, le=1440)
+    # Interactive session lifetime. The single source of truth for both the JWT
+    # `exp` claim and the auth cookie `Max-Age` (see `access_token_expires_seconds`
+    # and `app/core/security.py`). There is no server-side revocation, so this is
+    # also the maximum validity window of a leaked token - see docs/architecture.md
+    # §12.14. 30 min balances "stay signed in" against that exposure.
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, gt=0, le=1440)
     JWT_ISSUER: str = "infraguard-api"
 
     # Cookie that carries the access token (HttpOnly; never readable by JS).

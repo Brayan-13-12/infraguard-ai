@@ -62,6 +62,14 @@ describe("Sidebar", () => {
     expect(screen.getByRole("link", { name: "Assets" })).toHaveAttribute("href", "/assets");
   });
 
+  it("links Incidents as an active route", () => {
+    renderSidebar();
+    expect(screen.getByRole("link", { name: "Incidents" })).toHaveAttribute(
+      "href",
+      "/incidents",
+    );
+  });
+
   it("is a single flat list with no visible section headings", () => {
     renderSidebar();
     for (const heading of ["INFRASTRUCTURE", "OPERATIONS", "INTELLIGENCE", "SYSTEM"]) {
@@ -74,7 +82,7 @@ describe("Sidebar", () => {
 
   it("renders unbuilt modules as disabled items with a quiet marker, not links", () => {
     renderSidebar();
-    for (const label of ["Incidents", "AI Assistant", "Settings"]) {
+    for (const label of ["AI Assistant", "Settings"]) {
       expect(screen.queryByRole("link", { name: label })).not.toBeInTheDocument();
       const row = screen.getByText(label).closest("[aria-disabled='true']");
       expect(row).toBeTruthy();

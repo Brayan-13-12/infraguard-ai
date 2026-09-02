@@ -118,7 +118,7 @@ non-secret fallback defaults, so it starts without a `.env` file.
 | `DB_HEALTHCHECK_TIMEOUT` | Readiness DB-check timeout in seconds (`0 < t <= 30`) |
 | `NEXT_PUBLIC_API_URL` | Backend base URL as seen by the browser (no secrets) |
 | `JWT_SECRET` | HS256 signing secret (`>= 32` chars in production; never a `NEXT_PUBLIC_*`) |
-| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | Access-token lifetime (default 15) |
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | Interactive session lifetime (default **30**). Drives both the JWT `exp` and the cookie `Max-Age`. |
 | `AUTH_COOKIE_SECURE` / `AUTH_COOKIE_SAMESITE` | Auth cookie flags (`Secure` derived from env if unset) |
 
 ### Production configuration safety
@@ -206,16 +206,34 @@ pnpm dev
 | `GET` | `/api/v1/assets/{id}` | Asset detail → `200` · `404` (auth) |
 | `PATCH` | `/api/v1/assets/{id}` | Partial content update → `200` · `404` · `422` (auth) |
 | `POST` | `/api/v1/assets/{id}/deactivate` · `/reactivate` | Soft lifecycle toggle → `200` · `404` (auth) |
+| `GET` | `/api/v1/incidents` | List incidents - `page` `page_size` `q` `severity`\* `status`\* `priority`\* `asset_id` `started_from` `started_to` `sort` → `200` (auth) |
+| `GET` | `/api/v1/incidents/summary` | Aggregate counts (`open` `critical_open` `investigating` `monitoring` `resolved_recently` + `by_severity` / `by_status`) → `200` (auth) |
+| `POST` | `/api/v1/incidents` | Create an incident (+ `CREATED` / `ASSET_ADDED` timeline) → `201` · `422` (auth + CSRF) |
+| `GET` | `/api/v1/incidents/{id}` | Incident detail: metadata + affected assets + timeline → `200` · `404` (auth) |
+| `PATCH` | `/api/v1/incidents/{id}` | Partial update; timeline event per change; `asset_ids` replaces the set → `200` · `404` · `422` (auth + CSRF) |
+| `POST` | `/api/v1/incidents/{id}/resolve` · `/reopen` | Lifecycle → `200` · `404` (auth + CSRF) |
+| `POST` | `/api/v1/incidents/{id}/comments` | Append a `COMMENT` timeline entry → `201` · `404` · `422` (auth + CSRF) |
 | `GET` | `/docs` · `/openapi.json` | Swagger UI / OpenAPI schema |
 | `GET` | `/` | Service metadata |
 
-All `/api/v1/assets*` endpoints require authentication (`get_current_user`);
-state-changing methods also pass the `Origin`/`Referer` CSRF check. There is no
-destructive delete - deactivated assets remain queryable with `is_active=false`.
+All `/api/v1/assets*` and `/api/v1/incidents*` endpoints require authentication
+(`get_current_user`); state-changing methods also pass the `Origin`/`Referer`
+CSRF check. There is no destructive delete - deactivated assets remain queryable
+with `is_active=false`. Incident `created_by` / timeline actor is always the
+authenticated user, never a request-body value.
 
-\* `criticality` and `status` are **repeatable** (`?status=Degraded&status=Offline`
-→ `status IN (...)`); a single value still works. `/assets/summary` is read-only,
-uses a handful of `GROUP BY` queries, and reports `0` for absent catalog values.
+The **Incident ↔ Asset** relationship is a real many-to-many (`incident_assets`
+association table, not a JSON column); each incident carries a persisted
+**timeline** (`incident_events`). Entering a terminal status (`Resolved` /
+`Closed`) stamps `resolved_at`; reopening clears it. Asset dependency topology,
+impact analysis, AI root-cause and automated correlation are **future**
+milestones.
+
+\* `criticality`, `status`, `severity` and `priority` are **repeatable**
+(`?status=Degraded&status=Offline` → `... IN (...)`); a single value still works.
+`/assets/summary` and `/incidents/summary` are read-only, use a handful of
+`GROUP BY` queries, and report `0` for absent catalog values. The incident list's
+`affected_asset_count` is a correlated sub-select (no N+1).
 
 The `503` responses are documented in OpenAPI with the **same** schema as their
 `200` counterparts. Login failures are **generic** (`Invalid email or password`)
@@ -296,8 +314,12 @@ builds the Compose stack and smoke-tests liveness, readiness and the frontend.
 ### Logout semantics
 
 `POST /api/v1/auth/logout` clears the cookie. It does **not** revoke the JWT -
-without a `jti` denylist a stolen token stays valid until it expires (≤ 15 min).
-Revocation is a documented next step.
+there is no server-side revocation, so an already-stolen token stays valid until
+its `exp`. The session lifetime is **30 minutes** (`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`,
+raised from 15), which also widens that worst-case exposure window from ≤ 15 min
+to ≤ 30 min. Short-access-token + rotating-refresh-token / server-side sessions
+(with a `jti` denylist) are the documented next step - deferred to the Governance
+milestone.
 
 ## Roadmap
 
@@ -408,12 +430,37 @@ Revocation is a documented next step.
   Authenticated pages moved under an invisible `(app)` route group that provides
   `RequireAuth + AppShell` once
 
+**Incident Management (v0.5)**
+
+- `Incident` model + `incident_assets` (real many-to-many `Incident ↔ Asset`,
+  association table - not a JSON column) + `incident_events` (persisted timeline);
+  Alembic migration validated `upgrade → downgrade → upgrade`
+- Severity (`Critical`–`Low`), status (`Open` / `Investigating` / `Identified` /
+  `Monitoring` / `Resolved` / `Closed`), priority (`P1`–`P4`) - `StrEnum` + DB
+  `CHECK`, same convention as Assets
+- Authenticated `/api/v1/incidents` CRUD + `/summary` + `/resolve` · `/reopen` ·
+  `/comments`; list has server-side search / filter / sort / pagination and an
+  `affected_asset_count` correlated sub-select (**no N+1**); a mutation and its
+  timeline event commit **atomically**
+- Auto timeline events (created, status / severity / priority / owner change,
+  asset add / remove, resolve, reopen, comment). Entering a terminal status
+  stamps `resolved_at`; **reopening clears it** (documented decision)
+- `Incidents` is now an **active** nav item. Route-aware drawers (same Parallel +
+  Intercepting Routes architecture as Assets), interactive KPI overview, dense
+  list + mobile cards, searchable **paginated** affected-asset picker, restrained
+  timeline, Resolve / Reopen behind a confirm with toasts
+- Dashboard gains a compact "Incidentes recientes" block; Asset detail gains a
+  real "Incidentes relacionados" section (the dependency-map note stays a
+  **future** placeholder)
+- Not in scope: dependency topology, impact analysis, AI root-cause, automated
+  correlation / alert ingestion
+
 ### Planned (future phases)
 
 - Authorization / RBAC / roles; refresh-token rotation; JWT revocation; password
   reset; email verification; OAuth; MFA
 - Service & dependency modelling; asset lifecycle / obsolescence
-- Incident management and impact analysis
+- Incident **impact analysis** (built on the v0.5 Incident ↔ Asset relationship)
 - Infrastructure dependency graph (Neo4j)
 - AI-assisted incident analysis (AI providers, RAG)
 - Operational dashboards

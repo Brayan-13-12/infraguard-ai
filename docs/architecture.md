@@ -345,7 +345,7 @@ Health-check flow for the dashboard rows:
 | Secrets | Never hardcoded. `.env` git-ignored; only `.env.example` (placeholders) tracked. No secret baked into any image. `JWT_SECRET` never a `NEXT_PUBLIC_*`. PowerShell/OS artifacts git-ignored. |
 | Production config | Fail-fast: placeholder/short DB password, default DB user, wildcard CORS, **placeholder/short `JWT_SECRET`**, **insecure auth cookie** are rejected when `ENVIRONMENT=production`. |
 | Passwords | Argon2id; never stored in clear, logged, or returned. Generic **login** failure + timing equalisation. **Validation 422s never reflect the submitted value** (`input`/`ctx` stripped). |
-| Tokens | Short-lived HS256 JWT in an HttpOnly / SameSite=Lax / Secure-in-prod cookie. No revocation yet (documented). |
+| Tokens | HS256 JWT (30-min lifetime) in an HttpOnly / SameSite=Lax / Secure-in-prod cookie; cookie `Max-Age` = JWT `exp` (one config value). **No server-side revocation** - logout does not invalidate an already-stolen token (see 12.14). |
 | CSRF | SameSite=Lax + `Origin`/`Referer` allowlist on unsafe methods + JSON-preflight + non-wildcard CORS. |
 | Caching | Every `/api/v1/auth/*` response (success + error) is `Cache-Control: no-store`, `Pragma: no-cache`. |
 | Logout | Client drops session state only on a confirmed `200` - never on network/server failure. |
@@ -429,9 +429,12 @@ timing doesn't reveal whether an account exists.
 HS256, secret from `JWT_SECRET` (config; `>= 32` chars and non-placeholder
 enforced in production). Claims: `sub`, `iat`, `nbf`, `exp`, `jti`, `iss`,
 `type=access` - no email or password material. Lifetime
-`JWT_ACCESS_TOKEN_EXPIRE_MINUTES` (default 15). Decoding validates signature,
-issuer, expiry, required claims and token type; `alg=none`, tampered, expired
-and malformed tokens are rejected.
+`JWT_ACCESS_TOKEN_EXPIRE_MINUTES` - **default 30** (1800 s). This is the single
+source of truth: `access_token_expires_seconds` derives the auth-cookie
+`Max-Age` from it, and `create_access_token` derives the JWT `exp` from it, so
+the two never drift. Decoding validates signature, issuer, expiry, required
+claims and token type; `alg=none`, tampered, expired and malformed tokens are
+rejected.
 
 ### 12.5 Token storage - decision
 
@@ -550,10 +553,21 @@ limiter, API gateway, or WAF) - deferred to the security-hardening phase.
 
 ### 12.14 Known limitations (v0.2)
 
-- **No JWT revocation.** Logout clears the cookie *and* is confirmation-gated on
-  the client, but an already-issued token stays cryptographically valid until
-  `exp` (≤ 15 min). Next step: a `jti` denylist, or short access + refresh-token
-  rotation.
+- **No server-side JWT revocation.** Logout clears the cookie *and* is
+  confirmation-gated on the client, but an **already-issued token stays
+  cryptographically valid until its `exp`** - logout does **not** revoke a token
+  that was already stolen. The session lifetime is `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`
+  (**now 30 min**, raised from 15). That directly widens the worst-case exposure
+  of a leaked token from ≤ 15 min to ≤ 30 min - an accepted trade-off for this
+  milestone against a materially better "stay signed in" experience, given the
+  HttpOnly + `SameSite=Lax` + `Secure`(prod) + CSRF-origin-check posture that
+  makes exfiltration hard in the first place.
+  **Future session architecture** (not in this milestone): if longer interactive
+  sessions are wanted, move to a **short-lived access token (a few minutes) plus
+  a rotating refresh token / server-side session record**, with a `jti` denylist
+  (or a `session_version` on the user row) so logout and "sign out everywhere"
+  actually invalidate outstanding credentials. That is deferred to the
+  Governance / security-hardening work.
 - **Duplicate-registration enumeration (accepted tradeoff).** `POST /auth/register`
   returns an explicit `409 "Email is already registered"`, which lets an attacker
   learn whether an email has an account. Kept deliberately for portfolio
@@ -825,11 +839,12 @@ card, single column, no horizontal overflow. `AuthForm` and the whole
 authentication flow (validation, HttpOnly-cookie handling, redirects) are
 **unchanged**.
 
-### 14.8 Asset route-aware drawers
+### 14.8 Asset route-aware detail / drawers
 
-Navigating **from `/assets`** opens Asset detail / create / edit in a right-side
-drawer over the inventory (the list stays mounted behind it), via Next.js
-**Parallel + Intercepting Routes**.
+Navigating **from `/assets`** opens Asset **detail** in a large centered
+**workspace dialog** over the inventory, and **create / edit** in a right-side
+drawer, via Next.js **Parallel + Intercepting Routes**. (The detail experience
+was a right-side drawer up to the Detail-Workspace pass; see §16.)
 
 ```
 app/(app)/                     layout.tsx = AuthenticatedShell (RequireAuth + AppShell), one place
@@ -839,9 +854,9 @@ app/(app)/                     layout.tsx = AuthenticatedShell (RequireAuth + Ap
     page.tsx                   → AssetsBrowser
     @modal/
       default.tsx              → null   (the list, or any hard load)
-      (.)[id]/page.tsx         → <AssetDetailDrawer/>
-      (.)[id]/edit/page.tsx    → <AssetEditDrawer/>   (replaces the detail slot; no modal-on-modal)
-      (.)new/page.tsx          → <AssetCreateDrawer/>
+      (.)[id]/page.tsx         → id==="new" ? <AssetCreateWorkspace/> : <AssetDetailWorkspace/>
+      (.)[id]/edit/page.tsx    → <AssetEditDrawer/>   (legacy deep-link full-form edit)
+      (.)new/page.tsx          → <AssetCreateWorkspace/>   (retained; see §16 for why the dispatch above)
     [id]/page.tsx · [id]/edit/page.tsx · new/page.tsx   → full-page fallbacks
 ```
 
@@ -855,11 +870,11 @@ app/(app)/                     layout.tsx = AuthenticatedShell (RequireAuth + Ap
   `/assets?criticality=Critical&page=2` is restored **exactly** from history -
   filters / page / search are never reset.
 - **Shared implementation, no duplicated logic:** `AssetDetailLoader` is the one
-  fetch/state machine; `AssetOverview` / `AssetDescription` /
-  `AssetLifecycleButton` (deactivate/reactivate via `ConfirmDialog` + toast) are
-  shared by the full page and the drawer; `AssetForm` is used verbatim in both.
-  `AssetDrawerShell` is the drawer chrome (full-width mobile / ~544px desktop,
-  `shrink-0` header + close, scroll body, sticky footer, safe-area padding).
+  fetch/state machine; `AssetDetailContent` (tabs + inline field editors) and
+  `AssetLifecycleButton` are shared by the workspace and the full page;
+  `AssetForm` is used verbatim by create + the legacy edit drawer.
+  `AssetDrawerShell` is the create/edit drawer chrome; `WorkspaceDialog` is the
+  detail chrome (see §16).
 - **Toasts** on success (created / updated / deactivated / reactivated); a drawer
   action calls `notifyAssetsChanged()` (`lib/assetsRefresh.ts`) and
   `AssetsBrowser` refetches without losing state; a freshly created row is
@@ -871,7 +886,197 @@ app/(app)/                     layout.tsx = AuthenticatedShell (RequireAuth + Ap
   asset → not-found. Focus: detail drawer focuses the close control; create/edit
   focus the name field (`Overlay` `initialFocus`).
 
-## 15. Future direction
+## 15. Incident Management (v0.5)
+
+### 15.1 Scope
+
+Real, persisted incident tracking: an incident carries a lifecycle, an urgency,
+an owner, a **many-to-many** relationship to affected `Asset`s, and a persisted
+**timeline** of everything that happened to it. This is **not** the AI milestone
+- there is no LLM integration, no AI-generated root cause, no Neo4j topology, no
+automated correlation / alert ingestion, no external ticketing. The domain is
+shaped so those can be added later without redesigning it.
+
+### 15.2 Model & migration
+
+Three tables (`backend/app/models/incident.py`, migration
+`…_create_incidents_tables.py`, `down_revision = 7f3a9c2b1e84`):
+
+| table | purpose |
+| --- | --- |
+| `incidents` | `id`, `title`, `description`, `severity`, `status`, `priority`, `owner`, `started_at`, `detected_at`, `resolved_at`, `created_by` (FK → `users.id`, RESTRICT), `created_at`, `updated_at` |
+| `incident_assets` | association row; composite PK `(incident_id, asset_id)` **is** the uniqueness guarantee; both FKs `ON DELETE CASCADE`; secondary index on `asset_id` |
+| `incident_events` | timeline entry: `id`, `incident_id` (FK CASCADE), `type`, `message`, `created_by` (FK → `users.id`, SET NULL - nullable for future system events), `created_at`; composite index `(incident_id, created_at)` |
+
+Catalog fields follow the **same convention as `Asset`**: small stable
+`enum.StrEnum` vocabularies stored as their English string value, constrained by
+a DB `CHECK` (`_in_check`). No native PostgreSQL `ENUM`, no catalog tables.
+
+- **Severity**: `Critical` / `High` / `Medium` / `Low`
+- **Status**: `Open` / `Investigating` / `Identified` / `Monitoring` (active) ·
+  `Resolved` / `Closed` (terminal)
+- **Priority**: `P1` / `P2` / `P3` / `P4` (scheduling urgency, orthogonal to
+  severity; rendered as a neutral badge so it never competes with severity)
+- **Event type**: `CREATED`, `STATUS_CHANGED`, `SEVERITY_CHANGED`,
+  `PRIORITY_CHANGED`, `OWNER_CHANGED`, `ASSET_ADDED`, `ASSET_REMOVED`, `COMMENT`,
+  `RESOLVED`, `REOPENED`
+
+Indexes: `severity`, `status`, `priority`, `started_at`, `updated_at`,
+`created_at` on `incidents`; `asset_id` on `incident_assets`;
+`(incident_id, created_at)` on `incident_events`.
+
+### 15.3 Timeline architecture
+
+`backend/app/services/incidents.py` writes the mutation **and** its
+`IncidentEvent` rows in the **same unit of work** - the route calls
+`db.commit()` once, so a status change and its `STATUS_CHANGED` entry are atomic.
+Multiple events from one operation (create-with-assets, an asset-set diff) get a
+monotonic in-process timestamp so their chronological order is stable (UUID ids
+are not time-ordered). The list is returned oldest-first.
+
+Timeline **messages are persisted in Spanish** (the product's primary content
+language); `event.type` is the language-neutral classification used for icons
+and filtering. English-locale users see Spanish timeline prose - an accepted
+trade-off consistent with the Spanish-first content guideline.
+
+### 15.4 `resolved_at` / reopen - decision
+
+Moving an incident **into** a terminal status (`Resolved` / `Closed`) stamps
+`resolved_at = now()` if it is not already set. Moving an incident **out** of a
+terminal status ("reopen") **clears `resolved_at` back to `NULL`**. Rationale:
+the column always reflects the *current* resolution state; the history of a prior
+resolution is preserved as `RESOLVED` / `REOPENED` timeline entries. `POST
+/incidents/{id}/reopen` targets `Open`. Any status→status transition is allowed
+(no restrictive hard-coded state machine); the service derives the right event
+(`RESOLVED` / `REOPENED` / `STATUS_CHANGED`) and reconciles `resolved_at`.
+
+### 15.5 API
+
+`backend/app/api/v1/routes/incidents.py` - router-level
+`dependencies=[Depends(get_current_user)]`; writes add
+`Depends(require_trusted_origin)` and derive `created_by` / actor from the
+authenticated user (never from the body; `extra="forbid"` rejects a `created_by`
+field). DB errors are sanitised to a generic 503 by the global handlers.
+
+| method + path | purpose |
+| --- | --- |
+| `GET /api/v1/incidents` | list: server-side search (`title`/`description`/`owner`), repeatable `severity`/`status`/`priority`, `asset_id`, `started_from`/`started_to`, `sort` (`recent`/`oldest`/`started`/`severity`), pagination (`page_size` 1-100, **default 15**). `affected_asset_count` is a correlated sub-select - **no N+1** |
+| `GET /api/v1/incidents/summary` | dashboard aggregation (`open`, `critical_open`, `investigating`, `monitoring`, `resolved_recently`, `by_severity`, `by_status`) in a few `GROUP BY` queries |
+| `GET /api/v1/incidents/{id}` | detail: metadata + affected assets + timeline (with actor email) |
+| `POST /api/v1/incidents` | create (+ `CREATED` and one `ASSET_ADDED` per linked asset). Unknown `asset_ids` → 422 |
+| `PATCH /api/v1/incidents/{id}` | partial update; a timeline event per meaningful change. `asset_ids` **omitted** = untouched; **provided** (even `[]`) = the set is replaced, emitting `ASSET_ADDED` / `ASSET_REMOVED` for the diff |
+| `POST /api/v1/incidents/{id}/resolve` | force `Resolved` (idempotent) |
+| `POST /api/v1/incidents/{id}/reopen` | move a terminal incident back to `Open` (idempotent for active ones) |
+| `POST /api/v1/incidents/{id}/comments` | append a `COMMENT` timeline entry |
+
+### 15.6 Frontend
+
+Mirrors the Asset experience - same **Parallel + Intercepting Routes** drawer
+architecture (`app/(app)/incidents/…`, `@modal/(.)…`, full-page fallbacks),
+`useCloseDrawer("/incidents")`, `lib/incidentsRefresh.ts` event bus,
+`IncidentDetailLoader` fetch/state machine, shared `IncidentOverview` /
+`IncidentDescription` / `IncidentAffectedAssets` / `IncidentLifecycleActions`,
+`IncidentForm` used verbatim in the drawer and the full page, `IncidentDrawerShell`
+chrome. `services/incidents.ts` returns a typed `IncidentResult<T>`.
+
+- **`/…/new` interception** (Assets and Incidents): see §16 - `@modal/(.)[id]/page.tsx`
+  dispatches `id === "new"` → the create **modal**, otherwise → the detail
+  workspace, so the loaders never receive `"new"` and `GET
+  /api/v1/{assets,incidents}/new` is never issued.
+- **Pagination:** the incidents list defaults to **15 rows/page** (denser rows
+  than assets, which use 20); `DEFAULT_PAGE_SIZE` in
+  `backend/app/schemas/incident.py` and `INCIDENTS_PAGE_SIZE` in
+  `frontend/src/lib/config.ts`. Real server-side pagination (`page` / `page_size`
+  query params, `total` / `total_pages` in the response) - results are never
+  truncated client-side.
+- **List** (`IncidentsBrowser`): compact interactive KPI row (open / critical /
+  investigating / monitoring / resolved-recently - click applies the matching
+  filter), URL-synced filters + search + sort, dense desktop table (Incident /
+  Severity / Status / Priority / Affected assets / Owner / Started / Updated;
+  title is the stretched link, no UUID column) and mobile cards. Filters survive
+  the drawer and Back/Forward (URL is the source of truth).
+- **Affected-asset picker** (`IncidentAssetPicker`): server-side paginated search
+  (`page_size = 8`), never loads the whole inventory; selected assets shown as
+  removable chips.
+- **Timeline** (`IncidentTimeline`): restrained vertical timeline, muted icons
+  (never a bright colour per type), message + actor + timestamp.
+- **Lifecycle**: Resolve / Reopen behind a `ConfirmDialog`, toast
+  ("Incidente resuelto." / "Incidente reabierto."), `notifyIncidentsChanged()`.
+- **Dashboard**: a compact "Incidentes recientes" block (`RecentIncidents`) -
+  five most-recent incidents + an open/critical count line; rows use the full
+  `/incidents/{id}` route (the dashboard is outside `/incidents`, so there is no
+  list to keep behind a drawer).
+- **Asset detail**: a real "Incidentes relacionados" section (`RelatedIncidents`,
+  `GET /incidents?asset_id=…`); the "Dependencias y topología" note stays an
+  explicit **future** placeholder - topology is not implied.
+
+### 15.7 Known limitations / future milestones
+
+Asset **dependency topology**, **impact analysis**, **AI-assisted root cause**
+and **automated incident correlation / alert ingestion** are explicitly future
+milestones. Column-level list sorting is limited to four preset orders. Timeline
+prose is Spanish-only. There is no per-status transition guard.
+
+## 16. Detail workspace & inline editing
+
+The Asset and Incident **detail** experiences moved from a narrow right-side
+drawer to a large **centered workspace dialog** - an application surface, not a
+small confirmation dialog. **Creation** (`Nuevo activo` / `Nuevo incidente`) also
+moved from a right-side drawer to a **centered modal** (the smaller `modal`
+variant below). Only the **legacy `/…/[id]/edit`** deep-link routes still use a
+drawer.
+
+- **`WorkspaceDialog`** (`components/ui/overlay/`) - built on two new `Overlay`
+  variants:
+  - `workspace` (detail): `min(1100px, 100vw-4rem)` x `min(820px, 100dvh-4rem)`
+    on desktop - a fixed-size surface with a sticky tab bar + lifecycle footer.
+  - `modal` (create): `min(900px, 100vw-4rem)` wide, **content-height** capped to
+    `100dvh-4rem` - bigger than a `ConfirmDialog`, smaller than the detail
+    workspace; holds `AssetForm` / `IncidentForm` verbatim (own action row).
+  Both are **full-screen sheets on mobile**, with a subtle brand accent line, a
+  sticky header + close, and an internally-scrolling body. They join the existing
+  `overlayStack`, so a field editor / `ConfirmDialog` opened on top keeps Escape
+  + focus-trap to itself and never closes the parent.
+- **`/…/new` routing.** `Nuevo activo` / `Nuevo incidente` are `<Link
+  href="/assets/new" | "/incidents/new">`. Next.js 15.x resolves that client-side
+  navigation through the sibling **dynamic** `(.)[id]` interceptor (as
+  `id === "new"`), not `(.)new` - so **`@modal/(.)[id]/page.tsx` dispatches**:
+  `id === "new"` → the create modal, otherwise → the detail workspace.
+  `AssetDetailLoader` / `IncidentDetailLoader` therefore never receive `"new"`
+  and `GET /api/v1/{assets,incidents}/new` is never issued. `(.)new/page.tsx` is
+  kept as the semantically-correct interceptor for when the framework fixes the
+  precedence. Direct hard-load of `/assets/new` / `/incidents/new` still renders
+  the full-page form fallback. Regression tests:
+  `app/(app)/{assets,incidents}/modal-routing.test.tsx`.
+- **`Tabs`** (`components/ui/Tabs.tsx`) - WAI-ARIA tab pattern (roving tabindex,
+  Left/Right/Home/End), restrained underline styling, horizontal scroll on
+  narrow screens. Asset tabs: *Resumen / Información técnica / Incidentes /
+  Actividad*. Incident tabs: *Resumen / Activos afectados / Cronología /
+  Actividad*. Tab panels stay mounted (data is not re-fetched on switch);
+  fetch-backed panels (`RelatedIncidents`) mount lazily on first open.
+- **All persisted fields are shown** on the detail surface - nothing is hidden
+  behind a separate edit screen. `created_at` / `updated_at` / `id` /
+  `created_by` / `resolved_at` are read-only; everything else is editable.
+- **`FieldEditDialog`** (`components/ui/FieldEditDialog.tsx`) - one reusable
+  single-field editor (`text` / `textarea` / `select` / `date` / `datetime`)
+  used for every scalar field: a small `Dialog` with the control, inline
+  validation / operation errors and a Cancelar / Guardar footer. It stays open
+  on failure and returns focus to the trigger `DetailRow`. The affected-asset
+  set has its own thin `AffectedAssetsEditDialog` (value shape `string[]` +
+  the picker), reusing the same shell.
+- **Save flow:** `PATCH` only the changed field → `setAsset` / `setIncident`
+  (detail refreshes in place, no skeleton) → `notifyAssetsChanged()` /
+  `notifyIncidentsChanged()` (list refetches, filter/page kept) → success toast
+  → editor closes. Incident status crossing the terminal boundary is routed
+  through the dedicated `/resolve` / `/reopen` endpoints; every other transition
+  is a `PATCH` (the backend still generates the matching timeline event). The
+  footer keeps the confirm-gated one-click Resolve / Reopen.
+- The generic **"Editar"** action is gone from detail. `/assets/[id]/edit` and
+  `/incidents/[id]/edit` remain as **legacy full-form deep-link** routes.
+- **Asset picker** now opens with a batch of 20 (not 8) and loads more with
+  **"Mostrar más"** (server-side search, bounded by the 100 page-size cap).
+
+## 17. Future direction
 
 Later, dedicated feature branches are expected to add:
 
