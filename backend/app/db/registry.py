@@ -6,6 +6,23 @@ from test fixtures that build the schema.
 from __future__ import annotations
 
 from app.db.base import Base
-from app.models import Asset, Incident, IncidentAsset, IncidentEvent, User
+from app.models import (
+    Asset,
+    AuditChange,
+    AuditEvent,
+    Incident,
+    IncidentAsset,
+    IncidentEvent,
+    User,
+)
 
-__all__ = ["Asset", "Base", "Incident", "IncidentAsset", "IncidentEvent", "User"]
+__all__ = [
+    "Asset",
+    "AuditChange",
+    "AuditEvent",
+    "Base",
+    "Incident",
+    "IncidentAsset",
+    "IncidentEvent",
+    "User",
+]

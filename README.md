@@ -213,14 +213,31 @@ pnpm dev
 | `PATCH` | `/api/v1/incidents/{id}` | Partial update; timeline event per change; `asset_ids` replaces the set → `200` · `404` · `422` (auth + CSRF) |
 | `POST` | `/api/v1/incidents/{id}/resolve` · `/reopen` | Lifecycle → `200` · `404` (auth + CSRF) |
 | `POST` | `/api/v1/incidents/{id}/comments` | Append a `COMMENT` timeline entry → `201` · `404` · `422` (auth + CSRF) |
+| `GET` | `/api/v1/audit` | List audit events (newest first) - `page` `page_size` `q` `action`\* `entity_type`\* `actor` `entity_id` `from` `to`; each row has `change_count` + a bounded `change_preview` → `200` (auth) |
+| `GET` | `/api/v1/audit/summary` | "Activity today" counters (`events_today` `changes_today` `logins_today` `active_actors_today`) → `200` (auth) |
+| `GET` | `/api/v1/audit/{id}` | One event: actor + entity + request context + field changes → `200` · `404` (auth) |
 | `GET` | `/docs` · `/openapi.json` | Swagger UI / OpenAPI schema |
 | `GET` | `/` | Service metadata |
 
-All `/api/v1/assets*` and `/api/v1/incidents*` endpoints require authentication
-(`get_current_user`); state-changing methods also pass the `Origin`/`Referer`
-CSRF check. There is no destructive delete - deactivated assets remain queryable
-with `is_active=false`. Incident `created_by` / timeline actor is always the
-authenticated user, never a request-body value.
+All `/api/v1/assets*`, `/api/v1/incidents*` and `/api/v1/audit*` endpoints
+require authentication (`get_current_user`); state-changing methods also pass the
+`Origin`/`Referer` CSRF check. There is no destructive delete - deactivated
+assets remain queryable with `is_active=false`. Incident `created_by` / timeline
+actor is always the authenticated user, never a request-body value.
+
+The **audit log** is a centralized, append-only record of governance-relevant
+actions (Asset / Incident `CREATE` · `UPDATE` with per-field `old → new` diffs ·
+status / relation changes; `LOGIN` / `LOGOUT`). It answers *who* did *what*,
+*when*, to *which* record. It is **read-only** — there is no create / update /
+delete Audit API (those verbs return `405`) — and append-only is enforced at the
+application layer, **not** by cryptography (a DBA can still edit rows directly).
+Values for sensitive field names (`password`, `token`, `jwt`, `cookie`, …) are
+never persisted; `LOGIN` / `LOGOUT` store the user id + email only. The
+per-incident **timeline** (`incident_events`) and the audit log are deliberately
+separate: the timeline is the operator narrative for one incident, the audit log
+is the cross-system governance record. Audit history is retained indefinitely (a
+retention policy, RBAC-gated access, and Trash are future Governance phases). All
+authenticated users can currently read the audit log.
 
 The **Incident ↔ Asset** relationship is a real many-to-many (`incident_assets`
 association table, not a JSON column); each incident carries a persisted
@@ -229,8 +246,9 @@ association table, not a JSON column); each incident carries a persisted
 impact analysis, AI root-cause and automated correlation are **future**
 milestones.
 
-\* `criticality`, `status`, `severity` and `priority` are **repeatable**
-(`?status=Degraded&status=Offline` → `... IN (...)`); a single value still works.
+\* `criticality`, `status`, `severity`, `priority`, `action` and `entity_type`
+are **repeatable** (`?status=Degraded&status=Offline` → `... IN (...)`); a single
+value still works.
 `/assets/summary` and `/incidents/summary` are read-only, use a handful of
 `GROUP BY` queries, and report `0` for absent catalog values. The incident list's
 `affected_asset_count` is a correlated sub-select (no N+1).
@@ -455,8 +473,45 @@ milestone.
 - Not in scope: dependency topology, impact analysis, AI root-cause, automated
   correlation / alert ingestion
 
+**Governance & Administration - Phase 1 (Audit Log)**
+
+- `audit_events` + `audit_changes` tables (append-only; actor **and** entity
+  **snapshots** so records survive user / entity deletion); Alembic migration
+  validated `upgrade → downgrade → upgrade`
+- One `record_event` service, emitted from the route layer in the **same
+  transaction** as the mutation - a rolled-back request leaves no audit event
+- Asset & Incident `CREATE` / `UPDATE` (per-field `old → new` diff, changed
+  fields only) / `STATUS_CHANGED` / `RESOLVED` / `REOPENED` / `RELATION_CHANGED`;
+  `LOGIN` / `LOGOUT`. Idempotent no-ops write nothing
+- Sensitive-field denylist (`password` / `token` / `jwt` / `cookie` / …) → values
+  never persisted; per-request correlation id (`X-Request-ID`), direct client IP
+  only (no trusted-proxy header parsing)
+- Read-only, append-only API (`GET /api/v1/audit` + `/summary` + `/{id}`; write
+  verbs → `405`). Application-level append-only, **not** cryptographic. The list
+  row carries a **bounded `change_preview`** (first 3 changes) fetched in one
+  batched query — the timeline shows inline diffs with **no N+1**
+- `Audit` is a new **active** nav item (English). `/audit` is a **system activity
+  timeline** — date-grouped feed, inline change preview (`campo: antes → después`
+  + `+N`), **"Cargar más"** over server-side pages, collapsible filter bar.
+  Route-aware detail workspace: `Antes → Después` per field (stacked for long
+  text), **no red/green**; `LOGIN` / `LOGOUT` show no changes section at all;
+  `CREATE` shows its metadata snapshot
+- **Semantic colour system** for the timeline — one hue per action family (CREATE
+  emerald · UPDATE blue · STATUS_CHANGED amber · RESOLVED teal-green · REOPENED
+  orange · RELATION_CHANGED indigo · LOGIN cyan · LOGOUT slate · DELETE red ·
+  RESTORE violet) as `--audit-*` theme tokens; drives the node, the **segmented
+  rail** (each connector inherits its event's hue) and the 3px card accent, from
+  one catalog (`AUDIT_ACTION_VISUAL`). Colour stays confined — the card surface
+  is neutral. `DELETE` / `RESTORE` visuals are ready for the future Trash phase
+  but never emitted now
+- Not in scope: soft delete, Trash, RBAC, user-role admin, retention/pruning,
+  failed-login telemetry
+
 ### Planned (future phases)
 
+- Governance Phase 2+: soft delete + **Trash** (`DELETE` / `RESTORE`), **RBAC** /
+  roles (`ROLE_*` / `PERMISSION_CHANGED`), user-role administration, audit
+  **retention** policy
 - Authorization / RBAC / roles; refresh-token rotation; JWT revocation; password
   reset; email verification; OAuth; MFA
 - Service & dependency modelling; asset lifecycle / obsolescence

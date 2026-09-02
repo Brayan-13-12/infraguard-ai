@@ -56,6 +56,12 @@ requirements*.txt    # fully-resolved, hash-pinned locks (generated)
 | `PATCH`| `/api/v1/incidents/{id}` | Partial update; a timeline event per change. `asset_ids` replaces the affected set when sent. **Auth + CSRF.** | `200` / `401` / `403` / `404` / `422` |
 | `POST` | `/api/v1/incidents/{id}/resolve` \| `/reopen` | Lifecycle: force `Resolved` / move a terminal incident to `Open` (idempotent). **Auth + CSRF.** | `200` / `401` / `403` / `404` |
 | `POST` | `/api/v1/incidents/{id}/comments` | Append a `COMMENT` timeline entry. **Auth + CSRF.** | `201` / `401` / `403` / `404` / `422` |
+| `GET`  | `/api/v1/audit`        | List audit events, newest first (paginated; `q`; repeatable `action` / `entity_type`; `actor`; `entity_id`; `from` / `to`). Each row: `change_count` + a bounded `change_preview` (≤3, one batched query - no N+1). **Auth.** | `200` / `401` / `422` |
+| `GET`  | `/api/v1/audit/summary` | "Activity today" counters (`events_today` / `changes_today` / `logins_today` / `active_actors_today`). Read-only. **Auth.** | `200` / `401` / `503` |
+| `GET`  | `/api/v1/audit/{id}`   | One event: actor + entity + request context + field changes. **Auth.** | `200` / `401` / `404` |
+
+The audit log is **read-only + append-only**: there is deliberately no
+`POST` / `PUT` / `PATCH` / `DELETE` route (those verbs → `405`).
 
 The container `HEALTHCHECK` uses **liveness only**, so the backend is considered
 healthy as soon as the process serves requests - independent of the database.
@@ -137,6 +143,67 @@ recurs legitimately across environments.
   analysis, AI root-cause and automated correlation / alert ingestion are **not**
   implemented. No per-status transition guard, no per-incident authorization,
   last-write-wins on `PATCH`.
+
+## Audit log (governance & administration - Phase 1)
+
+`app/models/audit.py` - two tables (migration `b2c3d4e5f6a7`, validated
+`upgrade → downgrade → upgrade`):
+
+- **`audit_events`**: `id` (UUID PK), `occurred_at` (tz-aware, server-default
+  `now()`), `action` / `entity_type` (`String` + `CHECK IN (…)` - same
+  enum-as-check pattern as the rest of the schema), **entity snapshot**
+  (`entity_id` *loose reference, no FK* + `entity_label`), **actor snapshot**
+  (`actor_user_id` FK → `users.id` `ON DELETE SET NULL` **and** `actor_email`),
+  request context (`request_id` / `ip_address` / `user_agent`), JSONB `metadata`
+  (DB column `metadata`, Python attribute `event_metadata`). Indexes on
+  `occurred_at`, `actor_user_id`, `action`, `entity_type`, `entity_id` and
+  `(entity_type, entity_id)`.
+- **`audit_changes`**: child rows (`ON DELETE CASCADE`), one per changed field -
+  `field_name` (non-empty `CHECK`), `old_value` / `new_value` (safe-serialized
+  text; `NULL` = the field really was null).
+
+- **Write path** (`app/services/audit.py`): one `record_event(...)` function -
+  the **only** writer. It **flushes but never commits**; the calling route owns
+  the transaction, so an audit event is **atomic with the mutation it
+  describes** - a rolled-back request writes nothing. Emission is at the
+  **route layer** (`assets.py` / `incidents.py` / `auth.py`), after the domain
+  service flushes and before the single `db.commit()`. `diff_fields()` records
+  only fields that actually changed (`null ↔ value` handled); an idempotent
+  no-op writes nothing. Incident `PATCH` can emit up to three events (`UPDATE` +
+  a status action + `RELATION_CHANGED`).
+- **Sensitive values are never persisted**: any field whose **name** contains a
+  denylist token (`password`, `token`, `jwt`, `secret`, `cookie`,
+  `authorization`, `api_key`, `refresh`, …) is stored as `[redacted]`;
+  `metadata` is recursively scrubbed + size-capped. `LOGIN` / `LOGOUT` store
+  `user.id` + `user.email` only - never the password, JWT or cookie. Failed
+  logins are **not** audited in this phase (documented as future security
+  telemetry).
+- **Request context** (`app/api/request_context.py`): `request_id_middleware`
+  attaches a short correlation id to every request (honours an inbound
+  `X-Request-ID` only if it is a safe `[A-Za-z0-9._-]{1,64}` token) and echoes
+  it. IP is the **direct** `request.client.host` - forwarded headers
+  (`X-Forwarded-For`) are **not** trusted; IP / UA are context, never identity.
+- **Read API** (`app/api/v1/routes/audit.py`): `GET` only. Append-only is
+  enforced at the **application layer** - a DBA can still mutate rows directly,
+  so this is **not** cryptographic tamper-proofing and is not claimed as such.
+  Every endpoint requires auth; RBAC does not exist yet, so **all authenticated
+  users can read the audit log**.
+- **List `change_preview`** (`list_audit_events`): each list row carries the true
+  `change_count` **and** a bounded `change_preview` (first `CHANGE_PREVIEW_LIMIT`
+  = 3 change rows, `field_name` order) so the frontend timeline shows inline
+  diffs without a per-row `GET /audit/{id}`. It stays **two queries per page** -
+  the page + one batched `WHERE audit_event_id IN (…)` fetch - regardless of page
+  size. Stored `old_value`/`new_value` were redacted at write time, so the
+  preview reads them verbatim and cannot leak a secret. The full change set stays
+  exclusive to the detail endpoint.
+- **`IncidentEvent` vs `AuditEvent`**: kept separate on purpose - the timeline
+  is the per-incident operator narrative (Spanish), the audit log is the
+  cross-system governance record (English vocabulary).
+- **Known limits / future:** no cryptographic integrity; **no retention /
+  pruning** (history kept indefinitely - a 90/180/365-day policy is deferred);
+  no RBAC-gated access; `DELETE` / `RESTORE` (Trash) and `ROLE_*` /
+  `PERMISSION_CHANGED` (RBAC) are reserved in the vocabulary but never emitted
+  in Phase 1; values are truncated at 8 000 chars.
 
 ## Authentication
 

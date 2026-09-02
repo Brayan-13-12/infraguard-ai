@@ -1076,10 +1076,219 @@ drawer.
 - **Asset picker** now opens with a batch of 20 (not 8) and loads more with
   **"Mostrar más"** (server-side search, bounded by the 100 page-size cap).
 
-## 17. Future direction
+## 17. Audit Log (Governance & Administration — Phase 1)
+
+### 17.1 Scope
+
+A **centralized, append-only** record of governance-relevant actions. Every entry
+answers: **who** did **what**, **when**, to **which record**, and — for updates —
+**what changed**, **from** what value **to** what value. Emitted today:
+
+| Domain          | Actions                                                        |
+| --------------- | ------------------------------------------------------------- |
+| Asset           | `CREATE`, `UPDATE` (per-field diff), `STATUS_CHANGED` (activate/deactivate) |
+| Incident        | `CREATE`, `UPDATE`, `STATUS_CHANGED`, `RESOLVED`, `REOPENED`, `RELATION_CHANGED` (affected assets) |
+| Authentication  | `LOGIN`, `LOGOUT`                                             |
+
+`DELETE` / `RESTORE` (Trash), `ROLE_*` / `PERMISSION_CHANGED` (RBAC) and the
+`User` / `Role` / `Permission` entity types exist in the vocabulary /
+`CHECK` constraints but are **never written in Phase 1** — the architecture is
+ready for those phases without a migration. **Not in scope:** soft delete, Trash,
+RBAC, retention/pruning, per-failed-login records, AI, Neo4j, topology.
+
+### 17.2 Model & migration
+
+`app/models/audit.py`, migration `b2c3d4e5f6a7` (two tables, all indexes;
+`upgrade → downgrade → upgrade` validated against a disposable PostgreSQL):
+
+- **`audit_events`** — one row per logical action. `occurred_at` (tz-aware,
+  server-default `now()`), `action` / `entity_type` (`String` + `CHECK IN (…)`,
+  same enum-as-check pattern as the rest of the schema — no native PG ENUM),
+  **entity snapshot** (`entity_id` *loose reference, no FK* + `entity_label` so
+  the UI never has to load a record that may later disappear), **actor snapshot**
+  (`actor_user_id` FK → `users.id` `ON DELETE SET NULL` **and** `actor_email`, so
+  "who" survives a user deletion), request context (`request_id` / `ip_address` /
+  `user_agent`), and a small JSONB `metadata` summary (column `metadata`, mapped
+  to the Python attribute `event_metadata` — `metadata` is reserved on a
+  declarative model).
+- **`audit_changes`** — child rows (`ON DELETE CASCADE`), one per changed field:
+  `field_name` (non-empty `CHECK`) + safe-serialized `old_value` / `new_value`
+  (`NULL` means the field really was null, distinct from the string `"null"`).
+- Indexes cover the query surface: `occurred_at` (default ordering + date
+  filters), `actor_user_id`, `action`, `entity_type`, `entity_id`, and the
+  compound `(entity_type, entity_id)` for the future "everything about this
+  record" lookup. JSONB `metadata` is not indexed.
+
+### 17.3 Write path — one service, route-layer emission
+
+`app/services/audit.py` is the **only** writer. `record_event(db, *, ctx, action,
+entity_type, entity_id, entity_label, changes, metadata)` builds the event + its
+change rows and **flushes but never commits** — the calling **route** owns the
+transaction, so the audit event is **atomic with the mutation it describes**: a
+rolled-back request (validation error, DB error, explicit rollback) leaves **no
+"successful" audit event** behind. Emission is at the **route layer**
+(`assets.py` / `incidents.py` / `auth.py`), after the domain service flushes and
+before the single `db.commit()` — existing service signatures are untouched.
+
+- **Field diffs** — `diff_fields(before, after, fields)` compares an explicit
+  allow-list of snapshotted fields and records only those that actually changed
+  (`null → value` and `value → null` handled). An idempotent no-op
+  (deactivate an already-inactive asset; PATCH with unchanged values) writes
+  **nothing**.
+- **Incident PATCH** can produce up to three events — `UPDATE` (fields),
+  `STATUS_CHANGED` / `RESOLVED` / `REOPENED` (status, chosen by whether the
+  transition crosses the terminal boundary), `RELATION_CHANGED` (affected-asset
+  set, with added/removed label lists in `metadata`).
+- **Sensitive-value denylist** (`SENSITIVE_FIELD_TOKENS`: `password`, `token`,
+  `jwt`, `secret`, `cookie`, `authorization`, `api_key`, `refresh`, …) — any
+  field whose **name** contains a token is stored as `[redacted]` (the *fact* of
+  a change is kept, the value never is). `metadata` is recursively scrubbed
+  (sensitive keys redacted, non-JSON values coerced, depth-capped) and size-
+  capped. `LOGIN` / `LOGOUT` store `user.id` + `user.email` only — **never** the
+  password, JWT or cookie. Tests assert no secret can reach audit storage.
+- **`request_id`** — `request_id_middleware` (in `app/main.py`) attaches a short
+  id to every request (honouring an inbound `X-Request-ID` only if it is a safe
+  `[A-Za-z0-9._-]{1,64}` token, else a fresh UUID hex) and echoes it as
+  `X-Request-ID`. `get_request_context` reads it plus the **direct**
+  `request.client.host` and User-Agent — **forwarded headers (`X-Forwarded-For`)
+  are not trusted** (no configured trusted-proxy layer); IP / UA are context,
+  never identity.
+- **Failed logins are not audited** in this phase (they would bloat the
+  governance log). **Logout** auditing is best-effort — an already-cleared /
+  invalid session still returns 200 and simply writes no `LOGOUT` row.
+
+### 17.4 `IncidentTimeline` vs `AuditLog`
+
+Kept deliberately **separate**. `IncidentEvent` (§15.3) is the per-incident
+**operator narrative** ("what happened to this one incident", Spanish prose,
+shown on the incident detail). `AuditEvent` is the **cross-system governance
+record** ("what happened across the platform", English vocabulary, its own page).
+They are frequently written from the same transaction but never share a model,
+and neither replaces the other.
+
+### 17.5 API — read-only, append-only
+
+`app/api/v1/routes/audit.py`, mounted at `/api/v1/audit`:
+
+- `GET /audit` — paginated (`page`, `page_size` ≤ 100), newest first. Filters:
+  `q` (actor / entity / action contains), repeatable `action` & `entity_type`,
+  `actor` (email contains), `entity_id`, `from` / `to` (occurred-at range). List
+  rows are lightweight — metadata, the true `change_count`, and a **bounded
+  `change_preview`** (first 3 change rows, `field_name` order) so the timeline can
+  render inline diffs **without a per-row detail request**. `list_audit_events`
+  runs exactly **two** queries per page (the page + one batched
+  `WHERE audit_event_id IN (…)` preview fetch) regardless of page size — never
+  N+1. Stored `old_value`/`new_value` were redacted at write time, so the preview
+  reads them verbatim and still cannot leak a secret. The **full** change set
+  stays exclusive to the detail endpoint.
+- `GET /audit/summary` — compact honestly-derivable counters for **today** (UTC):
+  `events_today`, `changes_today`, `logins_today`, `active_actors_today`.
+- `GET /audit/{id}` — one event: actor + entity + request context + the full
+  field-change list + scrubbed `metadata`.
+- **There is no `POST` / `PUT` / `PATCH` / `DELETE`.** Those verbs return `405`.
+  Append-only is enforced at the **application layer** — a database administrator
+  can still mutate rows directly, so this is **not** cryptographic tamper-proofing
+  and is not claimed as such.
+- **Authorization (Phase 1):** every endpoint requires an authenticated, active
+  user. RBAC does not exist yet, so **all authenticated users can read the audit
+  log** until roles land in a later Governance phase.
+- A database error is sanitised to a generic `503` by the global handlers (§12.9),
+  same as the rest of the API.
+
+### 17.6 Frontend — the activity timeline
+
+The Audit page is a **system activity timeline**, not an admin table — human
+review found a plain table made every event look alike and buried "what changed".
+
+- **Navigation** — a fourth active item, **"Audit"** (English proper noun, never
+  "Auditoría"), between *Incidents* and the disabled *AI Assistant*, with a quiet
+  history icon.
+- **`/audit`** (`AuditBrowser` → `AuditTimeline`) — header **"Audit"** + Spanish
+  subtitle, a **thin single-line** "activity today" strip (no KPI cards), and a
+  **collapsible** filter bar (search always visible; Acción / Entidad / Usuario /
+  Desde / Hasta behind a "Filtros" toggle with an active-count badge) whose state
+  is mirrored to the URL query (shareable, hydrated on first load — the panel
+  opens automatically when a filter is active). The feed itself:
+  - **grouped by calendar day** — `Hoy` / `Ayer` / `1 de septiembre de 2026`
+    (`toLocaleDateString`); backend order (newest first) is untouched;
+  - a **segmented vertical rail** with a per-action **node** — icons: `CREATE`
+    plus, `UPDATE` pencil, `STATUS_CHANGED` swap, `RESOLVED` check, `REOPENED`
+    rotate, `RELATION_CHANGED` link, `LOGIN`/`LOGOUT` in/out, `DELETE` trash,
+    `RESTORE` unarchive (all internal SVGs — no icon dependency);
+  - each event is one **stretched `<Link>`** to `/audit/{id}` — time, an
+    entity-aware title (*Activo actualizado*, *Incidente resuelto*, *Inicio de
+    sesión*), the entity, the actor, and a **one-line summary from list data
+    only**: `UPDATE` → inline `campo: antes → después` for the first short
+    changes + `+N cambios más`; long/prose fields collapse to *"{campo}
+    modificado"*; `STATUS_CHANGED` → `Estado: … → …` (or *Activado* /
+    *Desactivado*); `RELATION_CHANGED` → *Añadidos … · Eliminados …* (diffed from
+    the `affected_assets` preview labels); `CREATE` → *"Nuevo activo
+    registrado"*; `LOGIN`/`LOGOUT` → **no summary line, no "Sin cambios"**;
+  - **A semantic colour system** makes the feed scannable *before* the title is
+    read. One hue per activity family — CREATE emerald · UPDATE blue ·
+    STATUS_CHANGED amber · RESOLVED teal-green · REOPENED orange ·
+    RELATION_CHANGED indigo · LOGIN cyan · LOGOUT slate · DELETE red · RESTORE
+    violet — as `--audit-*` tokens in `globals.css` (tuned per theme, CVD-spaced)
+    and a `audit.*` colour group in `tailwind.config.ts`. The **single source of
+    truth** is `AUDIT_ACTION_VISUAL` in `components/audit/catalog.ts`: each action
+    → `{ icon, node, rail, accent }` literal class strings, consumed by
+    `AuditActionIcon` (node) and `AuditTimeline` (rail segment + card accent) —
+    **no per-action conditionals in the components**. Colour is **confined**: a
+    faint `/10` node fill + solid icon + `/35` ring, a ~2px rail segment at
+    `/40–/50` that inherits the event's hue (a clean segmented line, never a
+    gradient), and a 3px card accent at `/80` — the card **surface stays
+    neutral**. Reserved RBAC actions borrow indigo / slate / amber; an unknown
+    action falls back to a neutral `bg-muted` node. `DELETE` / `RESTORE` visuals
+    are defined now for the future Trash module but are never emitted in Phase 1.
+    Hover: the node ring and card accent strengthen, the card lifts 1px
+    (`motion-safe:`), *"Ver detalle →"* appears.
+  - **Pagination — decision.** The feed uses a **"Cargar más"** button
+    (`AUDIT_PAGE_SIZE` = 25) that appends the next **server-side** page and
+    de-duplicates by event id, with a `{loaded} de {total}` counter and an
+    end-of-history marker. A chronological history reads as a continuous feed;
+    fixed page N/M navigation fought that. Filters still reset to page 1, and the
+    URL carries the filters (not the scroll depth — feed position is not a
+    shareable concept). There is **no** infinite / uncontrolled auto-fetch.
+  - Loading shows **timeline skeletons** (`AuditTimelineSkeleton` — node + title +
+    meta + summary), not table rows. Empty / filtered-empty / error-with-retry
+    are unchanged in intent.
+- **`/audit/[id]`** — a route-aware `WorkspaceDialog` (intercepted `@modal/(.)[id]`
+  over the still-mounted timeline) with a full-page fallback on hard load, sharing
+  one `AuditDetailContent`. Header: the action **icon** + entity-aware title +
+  `{Entidad} · {label} — {fecha}`. Body: **Resumen** (actor / fecha / acción /
+  entidad + a *"Ver …"* deep-link) → **Cambios** (prominent, right after) →
+  **Contexto** (Request ID / IP / User-Agent / entity id) → **Detalles**
+  (metadata). Changes render per field: short values as `antes → después`
+  (muted-old pill, subtle arrow, stronger-new pill); long values as **stacked
+  Antes / Después blocks** (muted vs. elevated surface) — **no red/green**.
+  `LOGIN` / `LOGOUT` show **no Cambios section at all** (not even a note);
+  `CREATE` surfaces its `metadata` snapshot. The page still renders in full if
+  the audited record is later gone (the label is snapshotted). `/audit` has no
+  sibling static routes, so the interceptor needs no `new`/`edit` dispatch. No
+  tabs — the event fits one workspace.
+
+### 17.7 Known limitations / future milestones
+
+- **No cryptographic integrity** — application-level append-only only.
+- **No retention / pruning** — audit history is kept **indefinitely**. A future
+  policy (e.g. 90 / 180 / 365 days, or export-then-prune) is deferred.
+- **No RBAC** — every authenticated user reads the whole log.
+- **No failed-login / rate-limit / permission-denied telemetry** — deferred as
+  security-observability work.
+- The read API is not exposed for bulk export; there is no diff for large text
+  fields beyond the 8 000-char value cap (truncated with an ellipsis marker). The
+  timeline's inline `change_preview` is capped at 3 rows — the rest is a `+N`
+  count until the event is opened.
+- `DELETE` / `RESTORE` (Trash) and `ROLE_*` / `PERMISSION_CHANGED` (RBAC) are the
+  next Governance phases that will start emitting the reserved vocabulary.
+
+## 18. Future direction
 
 Later, dedicated feature branches are expected to add:
 
+- **Governance & Administration** — Phase 1 (**Audit Log**, §17) has shipped;
+  next: soft delete + **Trash** (`DELETE` / `RESTORE`), **RBAC** (`ROLE_*` /
+  `PERMISSION_CHANGED`), user-role administration, audit **retention** policy
 - Authorization / RBAC; refresh tokens + revocation; password reset; email
   verification; OAuth; MFA
 - The InfraGuard domain model (assets, services, dependencies, incidents)
@@ -1090,8 +1299,9 @@ Later, dedicated feature branches are expected to add:
 ```mermaid
 graph LR
     v01["v0.1<br/>Bootstrap"] --> v02["v0.2<br/>Auth & users"]
-    v02 --> rbac["Authorization<br/>(RBAC)"]
-    rbac --> domain["Domain model<br/>(assets, incidents)"]
+    v02 --> domain["Domain model<br/>(assets, incidents)"]
+    domain --> audit["Governance P1<br/>(Audit Log)"]
+    audit --> gov["Governance P2+<br/>(Trash, RBAC)"]
     domain --> graph["Neo4j<br/>dependency graph"]
     domain --> ai["AI incident analysis"]
     domain --> k8s["Kubernetes + Helm"]

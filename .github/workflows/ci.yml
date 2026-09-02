@@ -270,6 +270,51 @@ jobs:
           echo "missing incident -> 404"
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$API/incidents/11111111-1111-1111-1111-111111111111")" = "404"
 
+      - name: Audit log smoke test
+        run: |
+          set -euo pipefail
+          API=http://localhost:8000/api/v1
+          ORIGIN='Origin: http://localhost:3000'
+          CT='Content-Type: application/json'
+          JAR=/tmp/audit-cookies.txt
+          EMAIL="audit-$(date +%s)@example.com"
+          CREDS="{\"email\":\"$EMAIL\",\"password\":\"a-ci-only-passphrase\"}"
+
+          curl -s -o /dev/null -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/register"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/login")" = "200"
+
+          echo "unauthenticated audit list -> 401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$API/audit")" = "401"
+
+          echo "audit is append-only: no write verbs"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "$ORIGIN" -X POST "$API/audit")" = "405"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "$ORIGIN" -X DELETE "$API/audit/11111111-1111-1111-1111-111111111111")" = "405"
+
+          echo "create + update an asset, then find both audit events"
+          BODY='{"name":"ci-audit-db","asset_type":"Database","environment":"Test","criticality":"Low","status":"Operational"}'
+          AID=$(curl -s -b "$JAR" -H "$ORIGIN" -H "$CT" -d "$BODY" "$API/assets" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          curl -s -o /dev/null -b "$JAR" -H "$ORIGIN" -H "$CT" -X PATCH -d '{"status":"Degraded"}' "$API/assets/$AID"
+
+          curl -s -b "$JAR" "$API/audit?entity_id=$AID" | python3 -c "import sys,json; d=json.load(sys.stdin); acts={e['action'] for e in d['items']}; assert {'CREATE','UPDATE'} <= acts, acts; assert all(e['entity_type']=='Asset' for e in d['items'])"
+
+          echo "the UPDATE list row carries a bounded inline change_preview; detail has the full set"
+          curl -s -b "$JAR" "$API/audit?entity_id=$AID&action=UPDATE" | python3 -c "import sys,json; e=json.load(sys.stdin)['items'][0]; p=e['change_preview']; assert 0 < len(p) <= 3; assert len(p) <= e['change_count']; assert {c['field_name'] for c in p} <= {'status'}"
+          EID=$(curl -s -b "$JAR" "$API/audit?entity_id=$AID&action=UPDATE" | python3 -c "import sys,json; print(json.load(sys.stdin)['items'][0]['id'])")
+          curl -s -b "$JAR" "$API/audit/$EID" | python3 -c "import sys,json; d=json.load(sys.stdin); c={x['field_name']:(x['old_value'],x['new_value']) for x in d['changes']}; assert c['status']==('Operational','Degraded'), c; assert d['request_id']"
+
+          echo "login wrote a LOGIN event with no field changes / preview and no secret"
+          curl -s -b "$JAR" "$API/audit?action=LOGIN" | python3 -c "import sys,json; d=json.load(sys.stdin); e=d['items'][0]; assert e['entity_type']=='Authentication'; assert e['change_count']==0; assert e['change_preview']==[]"
+          curl -s -b "$JAR" "$API/audit?page_size=100" | python3 -c "import sys,json; t=sys.stdin.read().lower(); assert 'passphrase' not in t and 'password' not in t and 'bearer ' not in t"
+
+          echo "summary (authenticated) -> shape"
+          curl -s -b "$JAR" "$API/audit/summary" | python3 -c "import sys,json; d=json.load(sys.stdin); assert set(d)=={'events_today','changes_today','logins_today','active_actors_today'}; assert d['events_today']>=1"
+
+          echo "summary unauthenticated -> 401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$API/audit/summary")" = "401"
+
+          echo "missing audit event -> 404"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$API/audit/11111111-1111-1111-1111-111111111111")" = "404"
+
       - name: Verify frontend (expect exactly 200)
         run: |
           for _ in $(seq 1 30); do
@@ -281,6 +326,7 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/assets)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/incidents)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/incidents/new)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/audit)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/dashboard)" = "200"
 
       - name: Dump logs on failure

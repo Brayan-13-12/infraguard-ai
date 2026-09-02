@@ -31,6 +31,19 @@ const config: Config = {
         danger: token("danger"),
         info: token("info"),
         ring: token("ring"),
+        // Audit activity accents - one hue per action family (see globals.css).
+        audit: {
+          create: token("audit-create"),
+          update: token("audit-update"),
+          status: token("audit-status"),
+          delete: token("audit-delete"),
+          restore: token("audit-restore"),
+          resolved: token("audit-resolved"),
+          reopened: token("audit-reopened"),
+          relation: token("audit-relation"),
+          login: token("audit-login"),
+          logout: token("audit-logout"),
+        },
         sidebar: {
           DEFAULT: token("sidebar"),
           border: token("sidebar-border"),

@@ -59,8 +59,9 @@ src/
   dot-path key and supports `{var}` interpolation. Resolution falls back
   active-language → Spanish → the key itself.
 - **Fixed English** - product/module proper nouns: `InfraGuard AI`, the sidebar
-  nav labels (`Dashboard`, `Assets`, `Incidents`, `AI Assistant`, `Settings`),
-  the `Dashboard` page heading, and the `Coming soon` / `soon` marker. Proper
+  nav labels (`Dashboard`, `Assets`, `Incidents`, `Audit`, `AI Assistant`,
+  `Settings`), the `Dashboard` / `Audit` page headings, and the `Coming soon` /
+  `soon` marker. Proper
   nouns ("PostgreSQL", "Argon2id", "HttpOnly") and user data (emails, UUIDs) are
   never translated.
 
@@ -180,8 +181,8 @@ The **rail** (`Sidebar`, `--sidebar` tokens) is a flex column: brand + footer
 ~68px, 200ms width transition, choice persisted in `localStorage` -
 non-sensitive); collapsed shows icons only with hover/focus tooltips and the
 label as the accessible name. Navigation (`src/lib/navigation.ts` → `NAV_ITEMS`)
-is a **single flat list** - Dashboard, Assets, Incidents, AI Assistant, Settings,
-**no section headings**. The active item gets a primary-tinted fill, primary
+is a **single flat list** - Dashboard, Assets, Incidents, Audit, AI Assistant,
+Settings, **no section headings**. The active item gets a primary-tinted fill, primary
 text/icon and a left accent bar (`aria-current="page"`); future items are
 `aria-disabled`, not links, with a quiet lock marker and a "Próximamente"
 tooltip. The footer: a compact identity row (avatar + email + theme toggle) over
@@ -341,6 +342,80 @@ still uses a drawer (`IncidentDrawerShell`).
   route since the dashboard is outside `/incidents`.
 - Topology / dependencies, impact analysis and AI root-cause are **future**
   milestones and are not implied anywhere in the UI.
+
+## Audit log (governance & administration - Phase 1)
+
+A fourth **active** nav item, **`Audit`** (English proper noun, never
+"Auditoría"), between `Incidents` and the disabled `AI Assistant`.
+
+```
+(app)/audit/
+  layout.tsx  → {children}{modal}
+  page.tsx    → AuditBrowser (Suspense)
+  [id]/       → full-page event detail fallback
+  @modal/(.)[id]/ → route-aware AuditDetailWorkspace over the still-mounted feed
+```
+
+The Audit page is a **system activity timeline**, not an admin table (a review
+found the table made every event look alike and hid "what changed").
+
+- **`/audit`** (`AuditBrowser` → `AuditTimeline`): header **"Audit"** + Spanish
+  subtitle, a **thin one-line** "activity today" strip (no KPI cards), and a
+  **collapsible** filter bar - search always visible; `Acción` / `Entidad` /
+  `Usuario` / `Desde` / `Hasta` behind a `Filtros` toggle with an active-count
+  badge - whose state is **mirrored to the URL query** (hydrated on first render,
+  panel auto-opens when a filter is active).
+- **The feed** (`AuditTimeline.tsx`): events **grouped by calendar day**
+  (`Hoy` / `Ayer` / `1 de septiembre de 2026`), newest first (backend order
+  untouched), on a **segmented** vertical rail. Each event is **one stretched
+  `<Link>`** to `/audit/{id}` carrying: time, an entity-aware title (*Activo
+  actualizado*, *Incidente resuelto*, *Inicio de sesión*), the entity, the actor,
+  and a **one-line summary from list data only** - `UPDATE` → inline
+  `campo: antes → después` for the first short changes + `+N cambios más`
+  (`AuditChangePreview`; long/prose fields collapse to *"{campo} modificado"*);
+  `STATUS_CHANGED` → `Estado: … → …` / *Activado* / *Desactivado*;
+  `RELATION_CHANGED` → *Añadidos … · Eliminados …*; `CREATE` → *"Nuevo activo
+  registrado"*; `LOGIN` / `LOGOUT` → **nothing** (no "Sin cambios").
+- **Semantic colour system** (`AUDIT_ACTION_VISUAL` in `catalog.ts` - the single
+  source of truth: action → `{ icon, node, rail, accent }`, no per-action
+  branching in components). One hue per family - CREATE emerald · UPDATE blue ·
+  STATUS_CHANGED amber · RESOLVED teal-green · REOPENED orange ·
+  RELATION_CHANGED indigo · LOGIN cyan · LOGOUT slate · DELETE red · RESTORE
+  violet - as `--audit-*` tokens (`globals.css`, tuned per theme) + a `audit.*`
+  Tailwind colour group. `AuditActionIcon` renders the node; `AuditTimeline`
+  colours the **rail segment** (inherits the event's hue - a clean segmented
+  line, no gradient) and the **3px card accent**. Colour is **confined**: `/10`
+  node fill + solid icon + `/35` ring, `/40–/50` rail, `/80` accent - the **card
+  surface stays neutral**. Icons are internal SVGs (no dependency):
+  plus/pencil/swap/check/rotate/link/log-in/log-out/**trash**/**unarchive**.
+  Hover strengthens the node ring + accent and lifts the card 1px
+  (`motion-safe:`), showing *"Ver detalle →"*.
+- **`DELETE` / `RESTORE`** visuals are defined in the catalog now (they are
+  already valid backend + frontend action values) so the timeline is ready when
+  the Trash module starts emitting them - **no Trash behaviour is implemented**.
+- **Pagination = "Cargar más"** (decision): appends the next **server-side** page
+  (`AUDIT_PAGE_SIZE` = 25), de-dupes by event id, shows `{loaded} de {total}` and
+  an end-of-history marker. A chronological history reads as a feed; N/M paging
+  fought that. Filters reset to page 1; the URL carries filters, not scroll
+  depth. No infinite / uncontrolled auto-fetch.
+- Loading shows **timeline skeletons** (`AuditTimelineSkeleton`); empty /
+  filtered-empty / error-with-retry unchanged in intent.
+- **`/audit/[id]`** (`AuditDetailWorkspace` / `AuditDetail`, one shared
+  `AuditDetailContent`): header = action **icon** + entity-aware title +
+  `{Entidad} · {label} — {fecha}`. Body order: **Resumen** → **Cambios**
+  (prominent) → **Contexto** (Request ID / IP / User-Agent / ID del registro) →
+  **Detalles** (metadata). Changes per field: short values `antes → después`
+  (muted-old pill, subtle arrow, stronger-new pill); long values **stacked
+  Antes / Después blocks** (muted vs. elevated surface) - **no red/green**.
+  `LOGIN` / `LOGOUT` render **no Cambios section**; `CREATE` shows its `metadata`
+  snapshot. `"Ver …"` deep-links to the Asset / Incident; the page still renders
+  if that record is gone. No tabs - it fits one workspace. `/audit` has no
+  sibling static routes, so the interceptor needs no `new` / `edit` dispatch.
+- **Service layer** (`services/audit.ts`) never throws - typed `AuditResult<T>`;
+  `credentials: "include"`; runtime type-guards on every response (incl. the new
+  `change_preview` array). There is **no create / update / delete** - read-only.
+- Retention/pruning, RBAC-gated access and Trash are **future** Governance phases
+  and are not implied anywhere in the UI.
 
 ## Auth screen
 

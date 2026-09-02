@@ -61,6 +61,16 @@ export const INCIDENT_LIMITS = {
   maxAssetLinks: 200,
 } as const;
 
+/** Audit log API (read-only, append-only - Governance & Administration Phase 1). */
+export const AUDIT_ENDPOINT = `${v1}/audit`;
+
+/** Compact "activity today" counters for the Audit page header. */
+export const AUDIT_SUMMARY_ENDPOINT = `${v1}/audit/summary`;
+
+/** Audit list pagination default - mirrors the backend (app/schemas/audit.py). */
+export const AUDIT_PAGE_SIZE = 25;
+export const AUDIT_MAX_PAGE_SIZE = 100;
+
 /** Password policy - mirrors the backend (app/core/config.py). */
 export const PASSWORD_MIN_LENGTH = 12;
 export const PASSWORD_MAX_LENGTH = 128;

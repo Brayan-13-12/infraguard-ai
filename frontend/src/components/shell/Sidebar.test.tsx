@@ -27,7 +27,14 @@ const USER = {
   created_at: "2026-08-31T00:00:00Z",
 };
 
-const MODULE_LABELS = ["Dashboard", "Assets", "Incidents", "AI Assistant", "Settings"];
+const MODULE_LABELS = [
+  "Dashboard",
+  "Assets",
+  "Incidents",
+  "Audit",
+  "AI Assistant",
+  "Settings",
+];
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -68,6 +75,12 @@ describe("Sidebar", () => {
       "href",
       "/incidents",
     );
+  });
+
+  it("links Audit as an active route with an English label", () => {
+    renderSidebar();
+    expect(screen.getByRole("link", { name: "Audit" })).toHaveAttribute("href", "/audit");
+    expect(screen.queryByText("Auditoría")).not.toBeInTheDocument();
   });
 
   it("is a single flat list with no visible section headings", () => {
