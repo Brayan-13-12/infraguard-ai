@@ -8,18 +8,21 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.exceptions import HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
+    _extract_token,
     auth_rate_limiter,
     get_current_user,
     require_trusted_origin,
 )
+from app.api.request_context import RequestContext, get_request_context
 from app.core.config import settings
-from app.core.security import create_access_token
+from app.core.security import TokenError, create_access_token, decode_access_token
 from app.db.session import get_db
+from app.models.audit import AuditAction, AuditEntityType
 from app.models.user import User
 from app.schemas.auth import (
     LoginRequest,
@@ -27,7 +30,8 @@ from app.schemas.auth import (
     RegisterRequest,
     UserPublic,
 )
-from app.services.users import EmailAlreadyRegistered, authenticate, create_user
+from app.services.audit import AuditContext, record_event
+from app.services.users import EmailAlreadyRegistered, authenticate, create_user, get_by_id
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -47,6 +51,16 @@ def _set_auth_cookie(response: Response, token: str) -> None:
         secure=settings.auth_cookie_secure,
         samesite=settings.AUTH_COOKIE_SAMESITE,
         path="/",
+    )
+
+
+def _auth_ctx(user: User, ctx: RequestContext) -> AuditContext:
+    return AuditContext(
+        actor_user_id=user.id,
+        actor_email=user.email,
+        request_id=ctx.request_id,
+        ip_address=ctx.ip_address,
+        user_agent=ctx.user_agent,
     )
 
 
@@ -112,13 +126,25 @@ def login(
     payload: LoginRequest,
     response: Response,
     db: Session = Depends(get_db),
+    ctx: RequestContext = Depends(get_request_context),
 ) -> UserPublic:
     user = authenticate(db, email=payload.email, password=payload.password)
     if user is None:
+        # A failed login is NOT audited in this phase (it would bloat the
+        # governance log). Failed-auth telemetry is documented as future
+        # security work - see docs/architecture.md.
         raise _INVALID_CREDENTIALS
 
     token, _ = create_access_token(subject=str(user.id))
     _set_auth_cookie(response, token)
+    record_event(
+        db,
+        ctx=_auth_ctx(user, ctx),
+        action=AuditAction.LOGIN,
+        entity_type=AuditEntityType.AUTHENTICATION,
+        entity_id=str(user.id),
+        entity_label=user.email,
+    )
     db.commit()
     return UserPublic.model_validate(user)
 
@@ -129,9 +155,34 @@ def login(
     summary="Log out (clears the access-token cookie)",
     dependencies=[Depends(require_trusted_origin)],
 )
-def logout(response: Response) -> MessageResponse:
-    # Stateless JWTs are not revoked server-side (no denylist in v0.2): an
-    # already-issued token stays cryptographically valid until it expires.
+def logout(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    ctx: RequestContext = Depends(get_request_context),
+) -> MessageResponse:
+    # Stateless JWTs are not revoked server-side (no denylist): an already-issued
+    # token stays cryptographically valid until it expires. Logout stays usable
+    # even without a valid session, so the audit event is best-effort: only a
+    # currently-valid session produces a LOGOUT record.
+    token = _extract_token(request)
+    if token:
+        try:
+            claims = decode_access_token(token)
+            user = get_by_id(db, claims["sub"])
+        except (TokenError, KeyError):
+            user = None
+        if user is not None:
+            record_event(
+                db,
+                ctx=_auth_ctx(user, ctx),
+                action=AuditAction.LOGOUT,
+                entity_type=AuditEntityType.AUTHENTICATION,
+                entity_id=str(user.id),
+                entity_label=user.email,
+            )
+            db.commit()
+
     _clear_auth_cookie(response)
     return MessageResponse(detail="Logged out")
 

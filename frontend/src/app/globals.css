@@ -46,6 +46,20 @@
   /* Informational accent - a cyan, deliberately distinct from the brand blue. */
   --info: 199 89% 40%;
 
+  /* Audit activity accents - one hue per action family so the timeline is
+     scannable. CVD-spaced, tuned per theme, kept restrained (colour is
+     supplemental to the icon + title, never a full-colour card). */
+  --audit-create: 158 66% 30%; /* emerald - something new entered the system */
+  --audit-update: 221 83% 53%; /* blue - existing information changed         */
+  --audit-status: 38 92% 33%; /* amber - operational state transition         */
+  --audit-delete: 0 66% 46%; /* red - removal / destructive                   */
+  --audit-restore: 265 55% 52%; /* violet - recovery from Trash               */
+  --audit-resolved: 174 62% 27%; /* teal-green - successful resolution        */
+  --audit-reopened: 22 84% 43%; /* orange - returned to active work           */
+  --audit-relation: 235 58% 55%; /* indigo - relationships changed            */
+  --audit-login: 194 88% 32%; /* cyan - session entry                         */
+  --audit-logout: 215 15% 40%; /* slate - session exit                        */
+
   --ring: 221 83% 53%;
 
   --shadow-color: 215 30% 20%;
@@ -97,6 +111,19 @@
   --danger: 0 72% 66%;
   --caution: 47 95% 59%;
   --info: 195 85% 60%;
+
+  /* Audit activity accents - dark theme: restrained saturated accents, never
+     neon; each stays legible against the near-black surface. */
+  --audit-create: 156 50% 53%;
+  --audit-update: 213 90% 64%;
+  --audit-status: 42 92% 60%;
+  --audit-delete: 0 72% 68%;
+  --audit-restore: 264 76% 74%;
+  --audit-resolved: 172 46% 50%;
+  --audit-reopened: 24 88% 62%;
+  --audit-relation: 234 80% 74%;
+  --audit-login: 190 80% 56%;
+  --audit-logout: 218 12% 60%;
 
   --ring: 213 92% 66%;
 

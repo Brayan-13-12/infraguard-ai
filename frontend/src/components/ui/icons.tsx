@@ -119,6 +119,24 @@ export const LogOutIcon = (p: IconProps) => (
   </Base>
 );
 
+export const LogInIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3" />
+  </Base>
+);
+
+export const ArrowsSwapIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M7 4 3 8l4 4M3 8h13M17 20l4-4-4-4M21 16H8" />
+  </Base>
+);
+
+export const LinkIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M9 15l6-6M11 6l1-1a4 4 0 0 1 6 6l-1 1M13 18l-1 1a4 4 0 0 1-6-6l1-1" />
+  </Base>
+);
+
 export const ChevronDownIcon = (p: IconProps) => (
   <Base {...p}>
     <path d="m6 9 6 6 6-6" />
@@ -214,5 +232,29 @@ export const ClockIcon = (p: IconProps) => (
   <Base {...p}>
     <circle cx="12" cy="12" r="9" />
     <path d="M12 7v5l3.5 2" />
+  </Base>
+);
+
+export const HistoryIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+    <path d="M3 4v4h4" />
+    <path d="M12 8v4l3 2" />
+  </Base>
+);
+
+export const TrashIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M4 7h16M10 11v6M14 11v6" />
+    <path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13" />
+    <path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3" />
+  </Base>
+);
+
+export const RestoreIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M21 8v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8" />
+    <path d="M2 8l2-4h16l2 4H2Z" />
+    <path d="M12 18v-7M9 14l3-3 3 3" />
   </Base>
 );

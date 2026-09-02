@@ -22,8 +22,10 @@ from fastapi.exceptions import HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_trusted_origin
+from app.api.request_context import get_audit_context
 from app.db.session import get_db
-from app.models.asset import AssetStatus, AssetType, Criticality, Environment
+from app.models.asset import Asset, AssetStatus, AssetType, Criticality, Environment
+from app.models.audit import AuditAction, AuditEntityType
 from app.schemas.asset import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
@@ -43,6 +45,7 @@ from app.services.assets import (
     set_active,
     update_asset,
 )
+from app.services.audit import AuditContext, FieldChange, diff_fields, record_event
 
 router = APIRouter(
     prefix="/assets",
@@ -52,12 +55,29 @@ router = APIRouter(
 
 _NOT_FOUND = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
 
+# Fields whose change is worth recording in the audit log.
+_AUDITED_ASSET_FIELDS = (
+    "name",
+    "asset_type",
+    "environment",
+    "criticality",
+    "status",
+    "hostname",
+    "ip_address",
+    "owner",
+    "description",
+)
+
 
 def _load(db: Session, asset_id: uuid.UUID):
     asset = get_asset(db, asset_id)
     if asset is None:
         raise _NOT_FOUND
     return asset
+
+
+def _asset_audit_snapshot(asset: Asset) -> dict[str, object]:
+    return {f: getattr(asset, f) for f in _AUDITED_ASSET_FIELDS}
 
 
 @router.get("", response_model=AssetPage, summary="List assets")
@@ -121,8 +141,26 @@ def get_asset_endpoint(asset_id: uuid.UUID, db: Session = Depends(get_db)) -> As
     responses={422: {"description": "Validation error"}},
     dependencies=[Depends(require_trusted_origin)],
 )
-def create_asset_endpoint(payload: AssetCreate, db: Session = Depends(get_db)) -> AssetRead:
+def create_asset_endpoint(
+    payload: AssetCreate,
+    db: Session = Depends(get_db),
+    ctx: AuditContext = Depends(get_audit_context),
+) -> AssetRead:
     asset = create_asset(db, payload)
+    record_event(
+        db,
+        ctx=ctx,
+        action=AuditAction.CREATE,
+        entity_type=AuditEntityType.ASSET,
+        entity_id=asset.id,
+        entity_label=asset.name,
+        metadata={
+            "asset_type": asset.asset_type,
+            "environment": asset.environment,
+            "criticality": asset.criticality,
+            "status": asset.status,
+        },
+    )
     db.commit()
     return AssetRead.model_validate(asset)
 
@@ -138,8 +176,26 @@ def update_asset_endpoint(
     asset_id: uuid.UUID,
     payload: AssetUpdate,
     db: Session = Depends(get_db),
+    ctx: AuditContext = Depends(get_audit_context),
 ) -> AssetRead:
-    asset = update_asset(db, _load(db, asset_id), payload)
+    asset = _load(db, asset_id)
+    before = _asset_audit_snapshot(asset)
+    asset = update_asset(db, asset, payload)
+    changes = diff_fields(
+        before,
+        _asset_audit_snapshot(asset),
+        payload.model_dump(exclude_unset=True).keys(),
+    )
+    if changes:
+        record_event(
+            db,
+            ctx=ctx,
+            action=AuditAction.UPDATE,
+            entity_type=AuditEntityType.ASSET,
+            entity_id=asset.id,
+            entity_label=asset.name,
+            changes=changes,
+        )
     db.commit()
     return AssetRead.model_validate(asset)
 
@@ -152,11 +208,11 @@ def update_asset_endpoint(
     dependencies=[Depends(require_trusted_origin)],
 )
 def deactivate_asset_endpoint(
-    asset_id: uuid.UUID, db: Session = Depends(get_db)
+    asset_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    ctx: AuditContext = Depends(get_audit_context),
 ) -> AssetRead:
-    asset = set_active(db, _load(db, asset_id), is_active=False)
-    db.commit()
-    return AssetRead.model_validate(asset)
+    return _set_active_audited(db, ctx, _load(db, asset_id), is_active=False)
 
 
 @router.post(
@@ -167,8 +223,27 @@ def deactivate_asset_endpoint(
     dependencies=[Depends(require_trusted_origin)],
 )
 def reactivate_asset_endpoint(
-    asset_id: uuid.UUID, db: Session = Depends(get_db)
+    asset_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    ctx: AuditContext = Depends(get_audit_context),
 ) -> AssetRead:
-    asset = set_active(db, _load(db, asset_id), is_active=True)
+    return _set_active_audited(db, ctx, _load(db, asset_id), is_active=True)
+
+
+def _set_active_audited(
+    db: Session, ctx: AuditContext, asset: Asset, *, is_active: bool
+) -> AssetRead:
+    was_active = asset.is_active
+    asset = set_active(db, asset, is_active=is_active)
+    if asset.is_active != was_active:  # skip the idempotent no-op
+        record_event(
+            db,
+            ctx=ctx,
+            action=AuditAction.STATUS_CHANGED,
+            entity_type=AuditEntityType.ASSET,
+            entity_id=asset.id,
+            entity_label=asset.name,
+            changes=[FieldChange("is_active", was_active, asset.is_active)],
+        )
     db.commit()
     return AssetRead.model_validate(asset)

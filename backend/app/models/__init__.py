@@ -14,6 +14,12 @@ from app.models.asset import (
     Criticality,
     Environment,
 )
+from app.models.audit import (
+    AuditAction,
+    AuditChange,
+    AuditEntityType,
+    AuditEvent,
+)
 from app.models.incident import (
     Incident,
     IncidentAsset,
@@ -29,6 +35,10 @@ __all__ = [
     "Asset",
     "AssetStatus",
     "AssetType",
+    "AuditAction",
+    "AuditChange",
+    "AuditEntityType",
+    "AuditEvent",
     "Criticality",
     "Environment",
     "Incident",

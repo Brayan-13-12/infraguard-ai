@@ -10,6 +10,7 @@ from starlette.responses import Response
 
 from app import __version__
 from app.api.errors import register_exception_handlers
+from app.api.request_context import request_id_middleware
 from app.api.v1.router import api_router
 from app.core.config import settings
 
@@ -50,6 +51,9 @@ def create_app() -> FastAPI:
             response.headers["Cache-Control"] = "no-store"
             response.headers["Pragma"] = "no-cache"
         return response
+
+    # Correlation id on every request/response, available to the audit writer.
+    app.middleware("http")(request_id_middleware)
 
     register_exception_handlers(app)
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
