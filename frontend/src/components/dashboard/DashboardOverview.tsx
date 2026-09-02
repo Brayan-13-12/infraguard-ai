@@ -19,6 +19,7 @@ import { CriticalityChart } from "./CriticalityChart";
 import { KpiRow } from "./KpiRow";
 import { OperationalSummary } from "./OperationalSummary";
 import { RecentAssets } from "./RecentAssets";
+import { RecentIncidents } from "./RecentIncidents";
 import { SystemStatusIndicator } from "./SystemStatusIndicator";
 
 type State =
@@ -153,8 +154,9 @@ export function DashboardOverview() {
             <CriticalityChart summary={state.summary} />
             <OperationalSummary summary={state.summary} />
           </Reveal>
-          <Reveal delayMs={120}>
+          <Reveal delayMs={120} className="grid gap-4 lg:grid-cols-2 lg:items-start">
             <RecentAssets refreshToken={refreshToken} />
+            <RecentIncidents refreshToken={refreshToken} />
           </Reveal>
         </div>
       )}

@@ -1,8 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AssetDetail } from "@/components/assets/AssetDetail";
+import { Toaster, clearToasts } from "@/components/ui/toast";
 import { LanguageProvider } from "@/i18n";
 import * as assetService from "@/services/assets";
 import type { Asset } from "@/types/asset";
@@ -33,25 +34,51 @@ function renderDetail(asset: Asset, onChanged = vi.fn()) {
   render(
     <LanguageProvider>
       <AssetDetail asset={asset} onChanged={onChanged} />
+      <Toaster />
     </LanguageProvider>,
   );
   return { onChanged };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearToasts();
+});
 
-describe("AssetDetail", () => {
-  it("renders the header, overview and description", () => {
+describe("AssetDetail (full page)", () => {
+  it("renders the header, tabs and the summary fields; no separate Edit route link", () => {
     renderDetail(ASSET);
     expect(screen.getByRole("heading", { name: "billing-api", level: 1 })).toBeInTheDocument();
-    expect(screen.getByText("billing.internal")).toBeInTheDocument();
-    expect(screen.getByText("10.2.3.4")).toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(4);
     expect(screen.getByText("payments-team")).toBeInTheDocument();
     expect(screen.getByText("Handles invoicing.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /editar/i })).toHaveAttribute(
-      "href",
-      "/assets/abc-123/edit",
+    expect(screen.queryByRole("link", { name: /editar/i })).not.toBeInTheDocument();
+  });
+
+  it("shows technical + activity data on their tabs", async () => {
+    renderDetail(ASSET);
+    await userEvent.click(screen.getByRole("tab", { name: /información técnica/i }));
+    expect(screen.getByText("billing.internal")).toBeInTheDocument();
+    expect(screen.getByText("10.2.3.4")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: /actividad/i }));
+    expect(screen.getByText("abc-123")).toBeInTheDocument();
+  });
+
+  it("edits the criticality inline via a small select dialog", async () => {
+    const update = vi
+      .spyOn(assetService, "updateAsset")
+      .mockResolvedValue({ ok: true, data: { ...ASSET, criticality: "Low" } });
+    const { onChanged } = renderDetail(ASSET);
+
+    await userEvent.click(screen.getByRole("button", { name: /editar criticidad/i }));
+    const editor = await screen.findByRole("dialog", { name: /editar criticidad/i });
+    await userEvent.selectOptions(within(editor).getByRole("combobox"), "Low");
+    await userEvent.click(within(editor).getByRole("button", { name: /^guardar$/i }));
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith("abc-123", { criticality: "Low" }),
     );
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith({ ...ASSET, criticality: "Low" }));
   });
 
   it("deactivates behind a confirm step and reports the new asset", async () => {
@@ -62,7 +89,7 @@ describe("AssetDetail", () => {
     const { onChanged } = renderDetail(ASSET);
 
     await userEvent.click(screen.getByRole("button", { name: /desactivar/i }));
-    expect(spy).not.toHaveBeenCalled(); // confirm required
+    expect(spy).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: /confirmar/i }));
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith(updated));
@@ -77,7 +104,6 @@ describe("AssetDetail", () => {
     const { onChanged } = renderDetail(inactive);
 
     expect(screen.getByText(/este activo está inactivo/i)).toBeInTheDocument();
-
     await userEvent.click(screen.getByRole("button", { name: /reactivar/i }));
     await userEvent.click(screen.getByRole("button", { name: /confirmar/i }));
 

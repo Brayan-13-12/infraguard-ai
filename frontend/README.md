@@ -27,17 +27,18 @@ src/
 │   ├── ui/               design system (Button, Input, Select, Textarea, Card,
 │   │   │                 Badge, Alert, PageHeader, Pagination, Spinner,
 │   │   │                 EmptyState, Reveal, Skeleton, icons)
-│   │   ├── overlay/      Overlay · Dialog · Drawer · ConfirmDialog  (stacked-safe)
+│   │   ├── overlay/      Overlay · Dialog · Drawer · ConfirmDialog · WorkspaceDialog  (stacked-safe)
 │   │   ├── toast/        Toaster · toast() / useToast() (no library)
 │   │   └── chart/        DonutChart · HorizontalBarChart · ChartDataTable · …
 │   ├── theme/ · auth/ · dashboard/
 │   ├── shell/            AppShell · AuthenticatedShell · Sidebar · SidebarFooter ·
 │   │                     Topbar · MobileNav · NavList · LogoutButton
 │   ├── assets/           AssetsBrowser · AssetsTable · AssetFilters ·
-│   │                     ActiveFilterChips · AssetForm · AssetDetail (+ shared
-│   │                     AssetOverview / AssetDescription / AssetLifecycleButton) ·
-│   │                     AssetDetailLoader · AssetDrawerShell ·
-│   │                     Asset{Detail,Create,Edit}Drawer · AssetBadges · catalog
+│   │                     ActiveFilterChips · AssetForm · AssetDetail ·
+│   │                     AssetDetailContent (tabs + inline editors) ·
+│   │                     AssetDetailWorkspace · AssetCreateWorkspace ·
+│   │                     AssetDetailLoader · AssetDrawerShell · AssetEditDrawer · AssetBadges · catalog
+│   │   ui/               Tabs · DetailRow · FieldEditDialog · WorkspaceDialog  (shared detail primitives)
 │   ├── AuthProvider · RequireAuth · AuthForm · AuthNav · Brand · SystemHealth
 ├── hooks/                useCloseDrawer
 ├── i18n/ · lib/ (cn · config · … · navigation · motion · assetsRefresh) · services/ · types/
@@ -196,11 +197,11 @@ is the one place that composes `<RequireAuth><AppShell>` (via
 
 ## Assets (infrastructure inventory)
 
-### Route-aware drawer experience
+### Route-aware detail workspace
 
-Navigating **from the inventory** opens Asset detail / create / edit in a
-right-side **drawer over the list** (the list stays mounted behind it), using
-Next.js **Parallel + Intercepting Routes**:
+Navigating **from the inventory** opens Asset **detail** in a large centered
+**workspace dialog** over the still-mounted list, and **create / edit** in a
+right-side drawer, using Next.js **Parallel + Intercepting Routes**:
 
 ```
 (app)/assets/
@@ -208,39 +209,57 @@ Next.js **Parallel + Intercepting Routes**:
   page.tsx          → AssetsBrowser
   @modal/
     default.tsx           → null (list, or any hard load)
-    (.)[id]/page.tsx      → <AssetDetailDrawer/>
-    (.)[id]/edit/page.tsx → <AssetEditDrawer/>   (replaces the detail slot - no modal-on-modal)
-    (.)new/page.tsx       → <AssetCreateDrawer/>
+    (.)[id]/page.tsx      → id==="new" ? <AssetCreateWorkspace/> : <AssetDetailWorkspace/>
+    (.)[id]/edit/page.tsx → <AssetEditDrawer/>        (legacy full-form deep-link edit)
+    (.)new/page.tsx       → <AssetCreateWorkspace/>   (retained; the dispatch above is the live path)
   [id]/page.tsx · [id]/edit/page.tsx · new/page.tsx   → full-page fallbacks
 ```
 
+- The detail surface is a **`WorkspaceDialog`** (`variant="workspace"`,
+  `min(1100px,100vw-4rem)` x `min(820px,100dvh-4rem)` desktop). **Creation** uses
+  the same component with `variant="modal"` (`min(900px,100vw-4rem)`,
+  content-height) - `AssetForm` / `IncidentForm` verbatim. Both are **full-screen
+  sheets on mobile**, sticky header + close, internally-scrolling body.
+- **`/assets/new` routing:** Next.js 15.x routes the client-side `/assets/new`
+  navigation through the sibling dynamic `(.)[id]` interceptor, so
+  `@modal/(.)[id]/page.tsx` dispatches (`id === "new"` → create modal, else →
+  detail). `AssetDetailLoader` never sees `"new"`; **`GET /api/v1/assets/new` is
+  never issued**. Same fix as Incidents; regression tests in
+  `app/(app)/assets/modal-routing.test.tsx`.
 - **Direct visit / refresh** of `/assets/[id]`, `/assets/new`, `/assets/[id]/edit`
-  still renders a usable **full page** (interception only applies to client
-  navigation). The URL always reflects the open asset.
+  still renders a usable **full page** (same `AssetDetailContent` / `AssetForm`).
 - Close / backdrop / Escape → `router.back()` (via `useCloseDrawer`), so the
-  exact `/assets?filters&page` state is restored from history - **filters and
-  page are never reset**.
-- `Overlay` keeps an overlay **stack** so a deactivate `ConfirmDialog` opened
-  over a drawer doesn't close the drawer on Escape.
-- The drawer chrome (`AssetDrawerShell`) is a right `Drawer` (full-width mobile,
-  ~544px desktop): `shrink-0` header with close, scrollable body, sticky action
-  footer, `--overlay` backdrop, safe-area padding.
-- Loading shows a **skeleton**, not a blank panel; a load failure shows a clean
-  Retry / Close state; a missing asset shows not-found.
+  exact `/assets?filters&page` state is restored - **filters and page are never
+  reset**.
+- `Overlay` keeps an overlay **stack**: a field editor / deactivate
+  `ConfirmDialog` opened over the workspace takes Escape + focus-trap and does
+  **not** close the workspace; closing it returns focus to the trigger row.
+- Loading shows a **skeleton**, not a blank panel; failure → Retry / Close;
+  missing asset → not-found.
+
+### Inline editing (no separate edit screen)
+
+Every persisted field is shown across four tabs (*Resumen / Información técnica /
+Incidentes / Actividad*) - `created_at` / `updated_at` / `id` are read-only,
+everything else is inline-editable. A quiet pencil on an editable row opens a
+small **`FieldEditDialog`** (one reusable primitive for `text` / `textarea` /
+`select` / `date` / `datetime`): it `PATCH`es only that field, refreshes the
+detail in place, refetches the list (`notifyAssetsChanged()`, filter/page kept),
+toasts, and closes - staying open with an inline error on failure. The generic
+"Editar" action is gone; `/assets/[id]/edit` remains a legacy full-form
+deep-link.
 
 ### Shared implementation (one detail, one form)
 
-`AssetDetailLoader` is the single fetch/loading/not-found/error/ready state
-machine; `AssetOverview` / `AssetDescription` / `AssetLifecycleButton` are shared
-by the full page and the drawer. `AssetForm` is unchanged and used verbatim in
-both. `AssetsTable` rows are a **stretched-link** (the name `<Link>`'s `::after`
-covers the row → whole-row → detail; keyboard opens via the focused name link),
-with a hover/focus **Edit** quick-action and a fresh-create highlight
-(`highlightId`).
+`AssetDetailLoader` is the single fetch/state machine; `AssetDetailContent`
+(tabs + inline editors) and `AssetLifecycleButton` are shared by the workspace
+and the full page. `AssetForm` is used verbatim by create + the legacy edit
+drawer. `AssetsTable` rows are a **stretched-link** with a hover/focus **Edit**
+quick-action and a fresh-create highlight (`highlightId`).
 
 | Route | Purpose |
 | --- | --- |
-| `/assets` | inventory - filter toolbar (search + catalog + activity, mobile-collapsible), URL-driven active-filter chips (`criticality` / `status` repeatable), responsive table/cards, pagination, explicit loading / empty / error states; `Suspense` around `useSearchParams` |
+| `/assets` | inventory - filter toolbar (search + catalog + activity, mobile-collapsible), URL-driven active-filter chips (`criticality` / `status` repeatable), responsive table/cards, real server-side pagination (**20 rows/page**, `ASSETS_PAGE_SIZE`), explicit loading / empty / error states; `Suspense` around `useSearchParams` |
 | `/assets/new` · `/assets/[id]` · `/assets/[id]/edit` | full-page fallbacks reusing the shared pieces (detail: header + badges, `AssetOverview`, `AssetDescription`, Edit + confirmation-gated Deactivate/Reactivate) |
 
 - **Toasts** (`components/ui/toast`): "Activo creado correctamente." /
@@ -264,6 +283,64 @@ with a hover/focus **Edit** quick-action and a fresh-create highlight
   each to a translation key for display. Criticality / status badges always
   carry the translated **text** - colour is only a hint (accessible + grayscale
   safe, both themes). The `Assets` nav label itself stays English.
+- **Asset detail** carries a real **"Incidentes relacionados"** section
+  (`RelatedIncidents`, `GET /incidents?asset_id=…`); the "Dependencias y
+  topología" note stays an explicit **future** placeholder.
+
+## Incidents (incident management)
+
+Mirrors the Assets experience - the **same** Parallel + Intercepting Routes
+architecture, `useCloseDrawer("/incidents")`, `lib/incidentsRefresh.ts` event
+bus, `IncidentDetailLoader` state machine, shared `IncidentDetailContent`
+(tabbed + inline-editable) / `IncidentAffectedAssets` / `IncidentLifecycleActions`,
+one `IncidentForm` for create + the legacy edit drawer. Detail opens in a
+`WorkspaceDialog` (tabs: *Resumen / Activos afectados / Cronología / Actividad*);
+**creation opens in the same component with `variant="modal"`** - a centered
+~900px content-height modal (`IncidentCreateWorkspace`). Only `/incidents/[id]/edit`
+still uses a drawer (`IncidentDrawerShell`).
+
+```
+(app)/incidents/
+  layout.tsx  → {children}{modal}
+  page.tsx    → IncidentsBrowser
+  @modal/  default.tsx · (.)[id]/page.tsx · (.)[id]/edit/page.tsx · (.)new/page.tsx
+  [id]/page.tsx · [id]/edit/page.tsx · new/page.tsx   → full-page fallbacks
+```
+
+| Route | Purpose |
+| --- | --- |
+| `/incidents` | compact interactive KPI row (open / critical / investigating / monitoring / resolved-recently → click applies the matching filter); URL-driven filters (severity / status / priority repeatable, `asset_id`, date range) + search + sort; dense desktop table (Incident / Severity / Status / Priority / Affected assets / Owner / Started / Updated - title is the stretched link, no UUID column) and mobile cards; real server-side pagination (**15 rows/page**, `INCIDENTS_PAGE_SIZE`); loading / empty / filtered-empty / error states |
+| `/incidents/new` · `/incidents/[id]` · `/incidents/[id]/edit` | full-page fallbacks reusing the shared pieces |
+
+- **Severity** badge: `Critical`→danger, `High`→warning, `Medium`→caution,
+  `Low`→neutral. **Status** badges stay quiet (only `Resolved` is coloured).
+  **Priority** is a plain neutral badge so it never competes with severity. Every
+  badge carries the translated text (`components/incidents/catalog.ts`).
+- **Affected-asset picker** (`IncidentAssetPicker`): opens with a batch of 20 and
+  loads more with **"Mostrar más"** (server-side search, bounded by the 100
+  page-size cap) - never loads the whole inventory; selected assets are removable
+  chips that stay visible when the search changes. Editable inline from detail
+  via `AffectedAssetsEditDialog`; saving reconciles the relationship, which
+  generates the `ASSET_ADDED` / `ASSET_REMOVED` timeline events.
+- **Inline field editing**: every field except `created_at` / `updated_at` /
+  `created_by` / `id` / `resolved_at` is inline-editable via `FieldEditDialog`.
+  Status crossing the terminal boundary routes through `/resolve` / `/reopen`;
+  other transitions `PATCH` (the backend still logs the timeline event).
+- **Timeline** (`IncidentTimeline`): restrained vertical timeline, muted icons
+  (not a bright colour per type), read-only, message + actor + timestamp;
+  Spanish prose from the backend.
+- **Lifecycle**: Resolve / Reopen behind a `ConfirmDialog`; toasts
+  "Incidente creado/actualizado correctamente.", "Incidente resuelto.",
+  "Incidente reabierto.", "Activos afectados actualizados.";
+  `notifyIncidentsChanged()` refetches the list without
+  losing filter/page state.
+- **Service layer** (`services/incidents.ts`) never throws - typed
+  `IncidentResult<T>` for every outcome; all calls use `credentials: "include"`.
+- **Dashboard**: `RecentIncidents` - a compact "Incidentes recientes" block
+  (five most recent + open/critical line); rows use the full `/incidents/{id}`
+  route since the dashboard is outside `/incidents`.
+- Topology / dependencies, impact analysis and AI root-cause are **future**
+  milestones and are not implied anywhere in the UI.
 
 ## Auth screen
 

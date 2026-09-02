@@ -43,7 +43,8 @@ x-backend-env: &backend-env
   BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-http://localhost:3000}
   # --- Authentication (v0.2) --- local-dev placeholder; rejected in production.
   JWT_SECRET: ${JWT_SECRET:-dev-insecure-jwt-secret-change-me}
-  JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+  # Fallback kept in step with the backend config default (app/core/config.py).
+  JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-30}
   AUTH_COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-lax}
 
 services:

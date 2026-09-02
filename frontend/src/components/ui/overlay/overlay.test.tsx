@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ConfirmDialog, Dialog } from "@/components/ui/overlay";
+import { ConfirmDialog, Dialog, WorkspaceDialog } from "@/components/ui/overlay";
 import { LanguageProvider } from "@/i18n";
 
 function DialogHarness() {
@@ -75,6 +75,59 @@ function ConfirmHarness({ onConfirm }: { onConfirm: () => void }) {
     </LanguageProvider>
   );
 }
+
+function WorkspaceHarness() {
+  const [wsOpen, setWsOpen] = useState(true);
+  const [fieldOpen, setFieldOpen] = useState(false);
+  return (
+    <LanguageProvider>
+      {wsOpen ? (
+        <WorkspaceDialog
+          label="Detalle del activo"
+          onClose={() => setWsOpen(false)}
+          header={<h2>Detalle del activo</h2>}
+        >
+          <button onClick={() => setFieldOpen(true)}>editar campo</button>
+          {fieldOpen ? (
+            <Dialog open onClose={() => setFieldOpen(false)} title="Editar responsable">
+              <input aria-label="valor" />
+            </Dialog>
+          ) : null}
+        </WorkspaceDialog>
+      ) : null}
+    </LanguageProvider>
+  );
+}
+
+describe("WorkspaceDialog + nested field editor", () => {
+  it("is a large labelled workspace surface", () => {
+    render(<WorkspaceHarness />);
+    const dialog = screen.getByRole("dialog", { name: "Detalle del activo" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog.className).toMatch(/w-\[min\(1100px/);
+  });
+
+  it("Escape on the nested field editor closes only the child; the workspace stays open", async () => {
+    render(<WorkspaceHarness />);
+    await userEvent.click(screen.getByRole("button", { name: "editar campo" }));
+    await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(2));
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(1));
+    expect(screen.getByRole("dialog", { name: "Detalle del activo" })).toBeInTheDocument();
+  });
+
+  it("restores focus to the edit trigger when the field editor closes", async () => {
+    render(<WorkspaceHarness />);
+    const trigger = screen.getByRole("button", { name: "editar campo" });
+    await userEvent.click(trigger);
+    await screen.findByRole("dialog", { name: "Editar responsable" });
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+});
 
 describe("ConfirmDialog", () => {
   it("runs the confirm action on confirm and closes on cancel", async () => {

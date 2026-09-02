@@ -80,6 +80,9 @@ def test_login_success_sets_httponly_cookie(client: TestClient) -> None:
     set_cookie = resp.headers["set-cookie"].lower()
     assert "httponly" in set_cookie
     assert "samesite=lax" in set_cookie
+    assert "path=/" in set_cookie
+    # Cookie Max-Age is kept in lock-step with the JWT lifetime (30 min).
+    assert "max-age=1800" in set_cookie
     assert COOKIE in client.cookies
 
 

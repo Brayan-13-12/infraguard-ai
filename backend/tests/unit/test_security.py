@@ -55,6 +55,24 @@ def test_access_token_roundtrip_has_expected_claims() -> None:
     assert abs(claims["exp"] - int(expires_at.timestamp())) <= 1
 
 
+def test_default_session_lifetime_is_30_minutes() -> None:
+    # Hermetic: the *default* (config field), independent of any repo-root .env.
+    from app.core.config import Settings
+
+    fresh = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert fresh.JWT_ACCESS_TOKEN_EXPIRE_MINUTES == 30
+    assert fresh.access_token_expires_seconds == 1800
+
+
+def test_token_exp_matches_the_configured_lifetime() -> None:
+    # Mechanism: the JWT `exp - iat` is exactly the configured minutes, and the
+    # cookie Max-Age uses the same derived value (one source of truth).
+    token, _ = create_access_token(subject="abc-123")
+    claims = decode_access_token(token)
+    assert claims["exp"] - claims["iat"] == settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    assert settings.access_token_expires_seconds == settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
+
+
 def test_password_is_never_in_token() -> None:
     token, _ = create_access_token(subject="u1")
     assert "password" not in token.lower()

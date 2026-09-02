@@ -1,8 +1,9 @@
 name: CI
 
 # Validation for InfraGuard AI: lint + unit/integration tests for both apps, and
-# a Docker Compose build + migration + smoke test (health, authentication and the
-# assets API incl. GET /api/v1/assets/summary) of the documented delivery path.
+# a Docker Compose build + migration + smoke test (health, authentication, the
+# assets API and the incidents API incl. their /summary endpoints) of the
+# documented delivery path.
 #
 # Out of scope (dedicated later phases): image publishing, deployment, Kubernetes,
 # security scanning, release automation.
@@ -91,7 +92,7 @@ jobs:
           NEXT_PUBLIC_API_URL: http://localhost:8000
 
   docker-smoke:
-    name: Docker Compose (build + migrate + auth smoke test)
+    name: Docker Compose (build + migrate + API smoke tests)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -213,6 +214,62 @@ jobs:
           echo "missing asset -> 404"
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$API/assets/11111111-1111-1111-1111-111111111111")" = "404"
 
+      - name: Incidents smoke test
+        run: |
+          set -euo pipefail
+          API=http://localhost:8000/api/v1
+          ORIGIN='Origin: http://localhost:3000'
+          CT='Content-Type: application/json'
+          JAR=/tmp/incident-cookies.txt
+          EMAIL="incidents-$(date +%s)@example.com"
+          CREDS="{\"email\":\"$EMAIL\",\"password\":\"a-ci-only-passphrase\"}"
+
+          curl -s -o /dev/null -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/register"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/login")" = "200"
+
+          echo "unauthenticated list -> 401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$API/incidents")" = "401"
+
+          echo "create affected asset -> 201"
+          ASSET='{"name":"ci-incident-asset","asset_type":"Database","environment":"Test","criticality":"High","status":"Operational"}'
+          AID=$(curl -s -b "$JAR" -H "$ORIGIN" -H "$CT" -d "$ASSET" "$API/assets" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+          echo "create incident (+ affected asset) -> 201 with CREATED + ASSET_ADDED timeline"
+          BODY="{\"title\":\"ci checkout latency\",\"severity\":\"High\",\"priority\":\"P2\",\"asset_ids\":[\"$AID\"]}"
+          IID=$(curl -s -b "$JAR" -H "$ORIGIN" -H "$CT" -d "$BODY" "$API/incidents" \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert [e['type'] for e in d['timeline']]==['CREATED','ASSET_ADDED']; assert len(d['affected_assets'])==1; print(d['id'])")
+          test -n "$IID"
+
+          echo "unknown affected asset -> 422"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "$ORIGIN" -H "$CT" -d '{"title":"x","severity":"Low","priority":"P4","asset_ids":["11111111-1111-1111-1111-111111111111"]}' "$API/incidents")" = "422"
+
+          echo "list finds it via search + affected_asset_count"
+          curl -s -b "$JAR" "$API/incidents?q=checkout" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['total']>=1; assert d['items'][0]['affected_asset_count']==1"
+
+          echo "filter by affected asset -> 200 total >= 1"
+          curl -s -b "$JAR" "$API/incidents?asset_id=$AID" | python3 -c "import sys,json; assert json.load(sys.stdin)['total']>=1"
+
+          echo "patch status -> STATUS_CHANGED event"
+          curl -s -b "$JAR" -H "$ORIGIN" -H "$CT" -X PATCH -d '{"status":"Investigating"}' "$API/incidents/$IID" \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='Investigating'; assert 'STATUS_CHANGED' in [e['type'] for e in d['timeline']]"
+
+          echo "resolve -> Resolved + resolved_at + RESOLVED event"
+          curl -s -b "$JAR" -H "$ORIGIN" -X POST "$API/incidents/$IID/resolve" \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='Resolved'; assert d['resolved_at']; assert 'RESOLVED' in [e['type'] for e in d['timeline']]"
+
+          echo "reopen -> Open + resolved_at cleared + REOPENED event"
+          curl -s -b "$JAR" -H "$ORIGIN" -X POST "$API/incidents/$IID/reopen" \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='Open'; assert d['resolved_at'] is None; assert 'REOPENED' in [e['type'] for e in d['timeline']]"
+
+          echo "summary (authenticated) -> shape"
+          curl -s -b "$JAR" "$API/incidents/summary" | python3 -c "import sys,json; d=json.load(sys.stdin); assert set(d)=={'total','open','critical_open','investigating','monitoring','resolved_recently','by_severity','by_status'}; assert d['total']>=1"
+
+          echo "summary unauthenticated -> 401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$API/incidents/summary")" = "401"
+
+          echo "missing incident -> 404"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$API/incidents/11111111-1111-1111-1111-111111111111")" = "404"
+
       - name: Verify frontend (expect exactly 200)
         run: |
           for _ in $(seq 1 30); do
@@ -222,6 +279,8 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/healthz)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/login)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/assets)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/incidents)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/incidents/new)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/dashboard)" = "200"
 
       - name: Dump logs on failure

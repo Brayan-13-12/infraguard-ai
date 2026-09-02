@@ -49,6 +49,13 @@ requirements*.txt    # fully-resolved, hash-pinned locks (generated)
 | `GET`  | `/api/v1/assets/{id}`  | Asset detail. **Auth.** | `200` / `401` / `404` |
 | `PATCH`| `/api/v1/assets/{id}`  | Partial content update (no `is_active`). **Auth + CSRF.** | `200` / `401` / `403` / `404` / `422` |
 | `POST` | `/api/v1/assets/{id}/deactivate` \| `/reactivate` | Soft lifecycle toggle (idempotent). **Auth + CSRF.** | `200` / `401` / `403` / `404` |
+| `GET`  | `/api/v1/incidents`    | List incidents (paginated; `q` search over `title`/`description`/`owner`; repeatable `severity`/`status`/`priority`; `asset_id`; `started_from`/`started_to`; `sort`). **Auth.** | `200` / `401` / `422` |
+| `GET`  | `/api/v1/incidents/summary` | Aggregate counts (`open` / `critical_open` / `investigating` / `monitoring` / `resolved_recently` + `by_severity` / `by_status`). Read-only. **Auth.** | `200` / `401` / `503` |
+| `POST` | `/api/v1/incidents`    | Create an incident (+ `CREATED` / `ASSET_ADDED` timeline). **Auth + CSRF.** | `201` / `401` / `403` / `422` |
+| `GET`  | `/api/v1/incidents/{id}` | Incident detail: metadata + affected assets + timeline. **Auth.** | `200` / `401` / `404` |
+| `PATCH`| `/api/v1/incidents/{id}` | Partial update; a timeline event per change. `asset_ids` replaces the affected set when sent. **Auth + CSRF.** | `200` / `401` / `403` / `404` / `422` |
+| `POST` | `/api/v1/incidents/{id}/resolve` \| `/reopen` | Lifecycle: force `Resolved` / move a terminal incident to `Open` (idempotent). **Auth + CSRF.** | `200` / `401` / `403` / `404` |
+| `POST` | `/api/v1/incidents/{id}/comments` | Append a `COMMENT` timeline entry. **Auth + CSRF.** | `201` / `401` / `403` / `404` / `422` |
 
 The container `HEALTHCHECK` uses **liveness only**, so the backend is considered
 healthy as soon as the process serves requests - independent of the database.
@@ -87,6 +94,50 @@ recurs legitimately across environments.
   authenticated user edits any asset - RBAC is a later phase), no bulk ops /
   import / export, last-write-wins on `PATCH`.
 
+## Incidents (incident management)
+
+`app/models/incident.py` - three tables:
+
+- **`incidents`**: `id` (UUID PK), `title`, `description`, `severity`
+  (`Critical`/`High`/`Medium`/`Low`), `status`
+  (`Open`/`Investigating`/`Identified`/`Monitoring`/`Resolved`/`Closed`),
+  `priority` (`P1`–`P4`), `owner`, `started_at` (defaults to now, backdatable),
+  `detected_at`, `resolved_at`, `created_by` (FK → `users.id`, RESTRICT),
+  tz-aware `created_at` / `updated_at`. Catalog fields are `varchar` + `CHECK`
+  from a `StrEnum` - same convention as `Asset`. Indexes on `severity`,
+  `status`, `priority`, `started_at`, `updated_at`, `created_at`.
+- **`incident_assets`**: real many-to-many `Incident ↔ Asset`. Composite PK
+  `(incident_id, asset_id)` is the uniqueness guarantee; both FKs
+  `ON DELETE CASCADE`; index on `asset_id` for the "incidents affecting this
+  asset" lookup. **Never** a JSON/array column.
+- **`incident_events`**: persisted timeline. `type` (CHECK-constrained
+  vocabulary), `message`, `created_by` (FK → `users.id`, SET NULL - nullable for
+  future system events), `created_at`; index `(incident_id, created_at)`.
+
+- **Timeline** (`app/services/incidents.py`): a mutation and its `IncidentEvent`
+  rows commit in the **same unit of work** (the route calls `db.commit()` once).
+  Auto events for create, status/severity/priority/owner change, asset add/remove,
+  resolve, reopen, comment. Messages are persisted **in Spanish** (product
+  content language); `type` is the language-neutral classification. Multi-event
+  operations get monotonic timestamps so ordering is stable.
+- **`resolved_at` / reopen - decision:** entering a terminal status stamps
+  `resolved_at`; leaving one (reopen → `Open`) **clears it to `NULL`**. The prior
+  resolution survives as `RESOLVED` / `REOPENED` timeline entries. Any
+  status→status transition is allowed; the service picks the right event.
+- **List** (`list_incidents`): `affected_asset_count` is a correlated
+  scalar sub-select evaluated by PostgreSQL in the same query - **no N+1**.
+  Search is an escaped `ILIKE` over `title` / `description` / `owner`.
+  `sort` ∈ `recent` (default) / `oldest` / `started` / `severity`.
+- **Validation** (`app/schemas/incident.py`): `extra="forbid"`; `created_by` and
+  `resolved_at` are absent from the input models (derived server-side). Unknown
+  `asset_ids` → `422`. `asset_ids` capped at 200 per request.
+- **Security:** every endpoint requires auth; writes add the CSRF origin check;
+  `created_by` / actor is taken from `get_current_user`, never the body.
+- **Known limits / future milestones:** asset dependency topology, impact
+  analysis, AI root-cause and automated correlation / alert ingestion are **not**
+  implemented. No per-status transition guard, no per-incident authorization,
+  last-write-wins on `PATCH`.
+
 ## Authentication
 
 ### User model
@@ -109,15 +160,19 @@ managers are encouraged.
 
 `app/core/security.py`. HS256, secret from `JWT_SECRET` (config). Claims:
 `sub` (user id), `iat`, `nbf`, `exp`, `jti`, `iss`, `type=access` - **no**
-email or password material. Short-lived (`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`,
-default 15). Validation enforces signature, issuer, expiry and the required
-claims; malformed / expired / wrong-type / `alg=none` tokens are rejected.
+email or password material. Lifetime `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`
+(**default 30**) is the *single* config value: `access_token_expires_seconds`
+derives the cookie `Max-Age` from it and `create_access_token` derives the JWT
+`exp` from it, so they never drift. Validation enforces signature, issuer,
+expiry and the required claims; malformed / expired / wrong-type / `alg=none`
+tokens are rejected.
 
-**No refresh tokens and no server-side revocation in v0.2.** Clearing the cookie
-on logout does not invalidate an already-issued token - it stays valid until it
-expires. A `jti` denylist (or short-lived access + refresh rotation) is the
-next hardening step. `JWT_SECRET` rotation / a KMS-managed key is a
-deployment-phase concern.
+**No refresh tokens and no server-side revocation.** Clearing the cookie on
+logout does not invalidate an **already-stolen** token - it stays valid until
+`exp`. Raising the lifetime 15 → 30 min widens that worst-case window
+accordingly. A short-access-token + rotating refresh token / server-side session
+(with a `jti` denylist) is the next hardening step - deferred to Governance.
+`JWT_SECRET` rotation / a KMS-managed key is a deployment-phase concern.
 
 ### Token storage - cookie, not localStorage
 

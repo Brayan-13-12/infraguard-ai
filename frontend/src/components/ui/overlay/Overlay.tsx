@@ -17,7 +17,13 @@ const FOCUSABLE =
  */
 const overlayStack: symbol[] = [];
 
-export type OverlayVariant = "center" | "right" | "left" | "bottom";
+export type OverlayVariant =
+  | "center"
+  | "right"
+  | "left"
+  | "bottom"
+  | "workspace"
+  | "modal";
 
 export interface OverlayProps {
   open: boolean;
@@ -52,6 +58,9 @@ const OUTER: Record<OverlayVariant, string> = {
   right: "flex justify-end",
   left: "flex justify-start",
   bottom: "flex items-end",
+  // Full-bleed on mobile, generously padded and centered from `sm` up.
+  workspace: "flex items-stretch justify-center sm:items-center sm:p-4 lg:p-8",
+  modal: "flex items-stretch justify-center sm:items-center sm:p-4 lg:p-8",
 };
 
 const PANEL: Record<OverlayVariant, string> = {
@@ -62,6 +71,18 @@ const PANEL: Record<OverlayVariant, string> = {
   left: "h-full w-full border-r border-border shadow-lg motion-safe:animate-slide-in-left",
   bottom:
     "w-full max-h-[85vh] rounded-t-xl border-t border-border shadow-lg motion-safe:animate-slide-in-up",
+  // Large centered application surface: full-screen sheet on mobile, a
+  // ~1100x820 (viewport-bounded) card on desktop.
+  workspace:
+    "h-[100dvh] w-full shadow-lg motion-safe:animate-scale-in " +
+    "sm:h-[min(820px,calc(100dvh-2rem))] sm:w-[min(1100px,calc(100vw-4rem))] sm:rounded-xl sm:border sm:border-border " +
+    "lg:h-[min(820px,calc(100dvh-4rem))]",
+  // Centered creation modal: full-screen sheet on mobile; on desktop a
+  // content-height card (~900px wide) capped to the viewport. Bigger than a
+  // confirm dialog, smaller than the detail workspace.
+  modal:
+    "h-[100dvh] w-full shadow-lg motion-safe:animate-scale-in " +
+    "sm:h-auto sm:max-h-[calc(100dvh-4rem)] sm:w-[min(900px,calc(100vw-4rem))] sm:rounded-xl sm:border sm:border-border",
 };
 
 /**
