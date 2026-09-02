@@ -8,7 +8,7 @@ const TONES: Record<Tone, string> = {
   warning: "bg-warning/14 text-warning",
   caution: "bg-caution/14 text-caution",
   danger: "bg-danger/12 text-danger",
-  info: "bg-primary/12 text-primary",
+  info: "bg-info/12 text-info",
 };
 
 export function Badge({

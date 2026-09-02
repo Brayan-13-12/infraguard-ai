@@ -1,38 +1,24 @@
 /**
  * Internationalisation configuration.
  *
- * Two languages, Spanish first. The choice is a non-sensitive UI preference and
- * is the only thing persisted to `localStorage` here - never auth data.
+ * The visible UI is Spanish-only. The i18n layer is kept (typed keys, `es.ts` as
+ * the source of truth, `en.ts` validated structurally against it) so wording
+ * lives in one place and a second locale can be reintroduced later - but there
+ * is no language switcher, and no language preference is ever persisted.
  */
 
 export const LANGUAGES = ["es", "en"] as const;
 
 export type Language = (typeof LANGUAGES)[number];
 
-/** Spanish is the product default. */
+/** The product renders in Spanish. */
 export const DEFAULT_LANGUAGE: Language = "es";
 
-/** `localStorage` key for the persisted language choice. */
-export const LANGUAGE_STORAGE_KEY = "infraguard.language";
-
-/** Compact label for the switcher control. */
-export const LANGUAGE_LABELS: Record<Language, string> = {
-  es: "ES",
-  en: "EN",
-};
-
-/** Full endonym - used for accessible names. */
-export const LANGUAGE_NAMES: Record<Language, string> = {
-  es: "Español",
-  en: "English",
-};
-
-/** Maps a language to the BCP-47 locale used for date/number formatting. */
+/**
+ * Maps a language to the BCP-47 locale used for date/number formatting. Kept
+ * even though the UI is Spanish-only: dates/numbers still format through it.
+ */
 export const LANGUAGE_LOCALES: Record<Language, string> = {
   es: "es-ES",
   en: "en-US",
 };
-
-export function isLanguage(value: unknown): value is Language {
-  return typeof value === "string" && (LANGUAGES as readonly string[]).includes(value);
-}

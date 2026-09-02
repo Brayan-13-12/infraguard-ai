@@ -51,7 +51,7 @@ describe("AssetStatusBadge", () => {
   it.each([
     ["Operational", "Operativo", "text-success"],
     ["Degraded", "Degradado", "text-warning"],
-    ["Maintenance", "Mantenimiento", "text-primary"],
+    ["Maintenance", "Mantenimiento", "text-info"],
     ["Offline", "Fuera de servicio", "text-danger"],
   ] as [AssetStatus, string, string][])(
     "%s renders the %s label with the %s tone",

@@ -6,19 +6,23 @@ InfraGuard AI aims to help operations teams understand their infrastructure,
 model service dependencies, manage incidents, and get AI-assisted analysis of
 impact and root cause.
 
-> ## Current status: Assets - Infrastructure Inventory
+> ## Current status: Product Experience
 >
-> Builds on the bootstrap (v0.1), authentication (v0.2) and the UI foundation
-> (v0.3). This milestone adds the **first business-domain module**: an
-> infrastructure inventory. Authenticated users can list (paginated, searchable,
-> filterable), view, create, edit and soft-deactivate / reactivate **assets**
-> (servers, VMs, databases, applications, network devices, containers, Kubernetes
-> clusters, cloud resources) at `/api/v1/assets` and `/assets`.
+> Builds on the bootstrap (v0.1), authentication (v0.2), the UI foundation (v0.3)
+> and the asset inventory. This milestone is the first **product-experience**
+> pass: an "infrastructure operations console" visual direction, **dark as the
+> default theme**, a **Spanish-only** visible UI (the i18n layer stays; the
+> switcher is gone), a **grouped sidebar**, reusable **overlay** (dialog / drawer
+> / confirm), **toast** and **skeleton** foundations, and a **real operational
+> Dashboard**: KPI counts and charts sourced from a new aggregation endpoint
+> `GET /api/v1/assets/summary`, with drill-down into the filtered Assets list.
+> `status` and `criticality` list filters now accept repeated values.
 >
-> **Still out of scope** (later phases): dependency graphs / Neo4j, incidents, AI
-> analysis, Kubernetes, obsolescence, RBAC / roles, and (from v0.2) OAuth / MFA /
-> refresh tokens / password reset / email verification / server-side JWT
-> revocation. See [Roadmap](#roadmap). This is **not** production-ready.
+> **Still out of scope** (later phases): asset detail/create/edit as route-driven
+> drawers, dependency graphs / Neo4j, incidents, AI analysis, Kubernetes,
+> obsolescence, RBAC / roles, and (from v0.2) OAuth / MFA / refresh tokens /
+> password reset / email verification / server-side JWT revocation. See
+> [Roadmap](#roadmap). This is **not** production-ready.
 
 ---
 
@@ -49,7 +53,9 @@ bridges the two tiers. Full detail (with Mermaid diagrams) is in
 | Layer | Technology |
 | --- | --- |
 | Frontend | Next.js 15 (App Router), React 19, TypeScript (strict), Tailwind CSS 3, pnpm |
-| Theming | `next-themes` (light / dark / system, persisted, no-flash); semantic CSS-variable tokens; internal Tailwind component set |
+| Theming | `next-themes` (**dark default**, light fully supported, persisted, no-flash); semantic CSS-variable tokens only (no `dark:` variants); internal Tailwind component set + overlay / toast / skeleton primitives |
+| Charts | Recharts (only on the Dashboard, lazy-loaded via `next/dynamic`, wrapped behind InfraGuard components with an accessible companion table) |
+| i18n | Spanish-only visible UI; typed keys, `es.ts` source of truth, `en.ts` structurally validated; no language switcher, no persisted language |
 | Frontend tests | Vitest + Testing Library; ESLint 9 flat config |
 | Backend | Python 3.13, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, pytest, ruff |
 | Auth | Argon2id (`argon2-cffi`), JWT HS256 (`pyjwt`), HttpOnly cookie |
@@ -194,7 +200,8 @@ pnpm dev
 | `POST` | `/api/v1/auth/login` | `{email, password}` → `200` user + sets HttpOnly cookie · `401` · `429` |
 | `POST` | `/api/v1/auth/logout` | Clears the auth cookie → `200` |
 | `GET` | `/api/v1/auth/me` | Authenticated user's public profile → `200` · `401` · `403` |
-| `GET` | `/api/v1/assets` | List assets - `page` `page_size` `q` `asset_type` `environment` `criticality` `status` `is_active` → `200` (auth) |
+| `GET` | `/api/v1/assets` | List assets - `page` `page_size` `q` `asset_type` `environment` `criticality`\* `status`\* `is_active` → `200` (auth) |
+| `GET` | `/api/v1/assets/summary` | Aggregate counts (`total` `active` `inactive` + `by_criticality` / `by_status` / `by_environment` / `by_type`, every catalog key present) → `200` (auth) |
 | `POST` | `/api/v1/assets` | Create an asset → `201` · `422` (auth) |
 | `GET` | `/api/v1/assets/{id}` | Asset detail → `200` · `404` (auth) |
 | `PATCH` | `/api/v1/assets/{id}` | Partial content update → `200` · `404` · `422` (auth) |
@@ -205,6 +212,10 @@ pnpm dev
 All `/api/v1/assets*` endpoints require authentication (`get_current_user`);
 state-changing methods also pass the `Origin`/`Referer` CSRF check. There is no
 destructive delete - deactivated assets remain queryable with `is_active=false`.
+
+\* `criticality` and `status` are **repeatable** (`?status=Degraded&status=Offline`
+→ `status IN (...)`); a single value still works. `/assets/summary` is read-only,
+uses a handful of `GROUP BY` queries, and reports `0` for absent catalog values.
 
 The `503` responses are documented in OpenAPI with the **same** schema as their
 `200` counterparts. Login failures are **generic** (`Invalid email or password`)
@@ -315,23 +326,21 @@ Revocation is a documented next step.
 **v0.3 - UI Foundation, Theming & i18n**
 
 - Light / dark theme (`next-themes`, persisted, no-flash) exposed as a single
-  contextual sun/moon toggle - "system" is still the first-visit default
-  internally but is never shown in the UI
+  contextual sun/moon toggle. (First-visit default became **dark** in the
+  Product-Experience milestone.)
 - Lightweight custom internationalisation (`src/i18n/`, no dependency):
-  **Spanish default** + English, `LanguageProvider` / `useTranslation()`,
-  persisted `ES | EN` switcher. Descriptive copy translates; product/module
-  proper nouns (`InfraGuard AI`, the sidebar nav labels, the `Dashboard`
-  heading, `Coming soon`) stay English in every locale
+  `LanguageProvider` / `useTranslation()`, typed keys, `es.ts` as the source of
+  truth. (The `ES | EN` switcher shipped here was **removed** in the
+  Product-Experience milestone - the visible UI is now Spanish-only.)
 - Semantic CSS-variable design tokens + a small internal Tailwind component set
   (Button, Input, Card, Badge, Alert, PageHeader, Spinner, EmptyState, Reveal)
 - Single self-contained centered authentication card (brand + language + theme
   live inside the card - nothing floats in the corners) on a restrained backdrop
-- Authenticated app shell: desktop sidebar carries navigation **plus** language,
-  theme, the signed-in identity and a confirmation-gated sign-out; the topbar is
-  mobile-only; the same controls live in the mobile drawer. Assets / Incidents /
-  AI Assistant / Settings shown as disabled "Coming soon"
-- Dashboard (account summary, platform modules, system health) with a reusable
-  entrance-motion system - no invented domain data
+- Authenticated app shell: desktop sidebar carries navigation **plus** theme,
+  the signed-in identity and a confirmation-gated sign-out; the topbar is
+  mobile-only; the same controls live in the mobile drawer. (The sidebar was
+  regrouped and the Dashboard rebuilt with real data in the Product-Experience
+  milestone.)
 - Responsive 360-1440px, `prefers-reduced-motion` respected, keyboard-accessible
   navigation, language and theme controls
 
@@ -348,7 +357,56 @@ Revocation is a documented next step.
 - Frontend `/assets` (list + filters + search + pagination), `/assets/new`,
   `/assets/[id]` (detail + lifecycle actions), `/assets/[id]/edit`; a reusable
   `AssetForm`; Assets is now an **active** navigation item; catalog values are
-  stored in English and translated (es/en) only for display
+  stored in English and translated only for display
+
+**Product Experience**
+
+- "Infrastructure operations console" visual direction; semantic tokens retuned
+  centrally, `--sidebar` / `--info` / `--overlay` / `--chart-1..6` /
+  `--auth-panel*` added; **dark is the default theme** for first-time visitors
+  (an explicit choice still persists), light fully supported
+- **Spanish-only** visible UI - `LanguageSwitcher` and the language preference
+  removed; the typed i18n layer (`es.ts` source of truth, `en.ts` structurally
+  validated) stays; product names (`InfraGuard AI`, `Dashboard`, `Assets`,
+  `Incidents`, `AI Assistant`, `Settings`) stay English
+- **Enterprise split** `/login` + `/register`: a deep branded slate panel
+  (statement over a faint glow + restrained capability highlights + a node
+  topology with one or two softly pulsing nodes, no fake stats) beside a focused
+  auth card whose header holds the theme toggle; collapses to a single column on
+  mobile. The auth flow itself is unchanged
+- **Flat, collapsible sidebar** - single list (Dashboard / Assets / Incidents /
+  AI Assistant / Settings), no section headings; future items `aria-disabled`
+  with a quiet lock + "Próximamente" tooltip. Desktop collapse ↔ expand (~256 ↔
+  ~68px, persisted); collapsed = icon rail with tooltips. `AppShell` is
+  `h-[100dvh] overflow-hidden` and the **main pane** scrolls, so the full-height
+  rail never appears cut off. Sign-out relabelled **"Salir"** (safe two-step /
+  dialog unchanged)
+- Reusable **overlay** foundation (`Overlay` / `Dialog` / `Drawer` /
+  `ConfirmDialog` - portal, focus trap + restore, scroll lock incl. the main
+  pane, Escape, a11y), **toast** and **skeleton** primitives
+- `GET /api/v1/assets/summary` aggregation endpoint (auth, read-only, no schema
+  change); `status` / `criticality` list filters accept repeated values
+- Real operational **Dashboard**, deliberately calm: KPI row (drill hint + arrow
+  on hover) + **one** criticality donut on a level-1 surface (large central
+  metric, segment ↔ legend cross-highlight, accessible companion table) + a
+  concise interactive "Estado actual" operational summary (status rows link into
+  Assets; top-environment / top-type insights) + recently updated assets.
+  **"Actualizar" really refetches** the summary, recent list and health check.
+  The status / environment / type charts and the old platform-modules / account
+  panels were removed from the composition (chart primitives kept)
+- Assets page: filter **toolbar** card (search + selects, mobile-collapsible) +
+  URL-driven active-filter **chip row** (`Limpiar todo`); table-row / status-row
+  hover affordances; a small microinteraction language (button press, card and
+  row transitions, chip animation) - all `prefers-reduced-motion` safe
+- **Asset route-aware drawers** (Next.js Parallel + Intercepting Routes):
+  navigating from `/assets` opens detail / create / edit in a right-side drawer
+  over the still-mounted list; direct visits / refreshes of `/assets/[id]`,
+  `/assets/new`, `/assets/[id]/edit` still render usable full pages. Close =
+  `router.back()`, so filters / page are restored exactly. One shared
+  detail-loader + form (no duplicated logic), success toasts, list auto-refresh,
+  fresh-row highlight, skeletons, `ConfirmDialog`-over-drawer without stacking.
+  Authenticated pages moved under an invisible `(app)` route group that provides
+  `RequireAuth + AppShell` once
 
 ### Planned (future phases)
 

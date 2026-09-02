@@ -4,6 +4,7 @@ import {
   createAsset,
   deactivateAsset,
   getAsset,
+  getAssetSummary,
   listAssets,
   reactivateAsset,
   updateAsset,
@@ -64,6 +65,18 @@ describe("listAssets", () => {
     expect(await listAssets()).toEqual({ ok: false, error: { kind: "unauthorized" } });
   });
 
+  it("repeats criticality / status params for multi-value filters, single value still works", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json(PAGE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listAssets({ criticality: ["Critical", "High"], status: "Offline" });
+
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toContain("criticality=Critical");
+    expect(url).toContain("criticality=High");
+    expect(url).toContain("status=Offline");
+  });
+
   it("maps a network failure to unreachable", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
     expect(await listAssets()).toEqual({ ok: false, error: { kind: "unreachable" } });
@@ -72,6 +85,33 @@ describe("listAssets", () => {
   it("reports unexpected when the payload shape is wrong", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ nope: true })));
     expect(await listAssets()).toMatchObject({ ok: false, error: { kind: "unexpected" } });
+  });
+});
+
+describe("getAssetSummary", () => {
+  const SUMMARY = {
+    total: 2,
+    active: 1,
+    inactive: 1,
+    by_criticality: { Critical: 1, High: 0, Medium: 1, Low: 0 },
+    by_status: { Operational: 2, Degraded: 0, Maintenance: 0, Offline: 0 },
+    by_environment: { Production: 2, Staging: 0, Development: 0, Test: 0 },
+    by_type: { Server: 2 },
+  };
+
+  it("returns the summary on 200", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(SUMMARY)));
+    expect(await getAssetSummary()).toEqual({ ok: true, data: SUMMARY });
+  });
+
+  it("reports unexpected on a malformed payload", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ total: "nope" })));
+    expect(await getAssetSummary()).toMatchObject({ ok: false, error: { kind: "unexpected" } });
+  });
+
+  it("maps a network failure to unreachable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("x")));
+    expect(await getAssetSummary()).toEqual({ ok: false, error: { kind: "unreachable" } });
   });
 });
 

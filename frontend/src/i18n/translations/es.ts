@@ -18,15 +18,18 @@ const es = {
     refresh: "Actualizar",
     refreshing: "Actualizando…",
     cancel: "Cancelar",
+    retry: "Reintentar",
   },
   a11y: {
-    changeLanguage: "Cambiar idioma",
     switchToLight: "Cambiar a modo claro",
     switchToDark: "Cambiar a modo oscuro",
-    themePlaceholder: "Cargando el control de tema",
     openNav: "Abrir menú de navegación",
     closeNav: "Cerrar menú de navegación",
     primaryNav: "Navegación principal",
+    userMenu: "Menú de cuenta",
+    collapseNav: "Contraer la navegación",
+    expandNav: "Expandir la navegación",
+    comingSoon: "Próximamente",
     showPassword: "Mostrar contraseña",
     hidePassword: "Ocultar contraseña",
   },
@@ -48,6 +51,17 @@ const es = {
     registeredTitle: "Cuenta creada",
     registeredBody: "Tu cuenta para {email} está lista.",
     registeredContinue: "Continuar para iniciar sesión",
+    split: {
+      statement: "Inteligencia de infraestructura para equipos tecnológicos modernos.",
+      inventoryTitle: "Visibilidad del inventario",
+      inventoryBody:
+        "Servidores, bases de datos y servicios en un inventario único y consultable.",
+      operationsTitle: "Inteligencia operacional",
+      operationsBody:
+        "Estado, criticidad y cambios de tu infraestructura de un vistazo.",
+      aiTitle: "Análisis asistido por IA",
+      aiBody: "Causa raíz e impacto con ayuda de IA cuando algo falla.",
+    },
     fieldErrors: {
       emailRequired: "El correo electrónico es obligatorio.",
       emailInvalid: "Introduce un correo electrónico válido.",
@@ -67,9 +81,10 @@ const es = {
   },
   shell: {
     signedInAs: "Sesión iniciada como",
-    logout: "Cerrar sesión",
-    loggingOut: "Cerrando sesión…",
+    logout: "Salir",
+    loggingOut: "Saliendo…",
     confirmLogout: "Confirmar",
+    logoutConfirmTitle: "¿Deseas salir de InfraGuard AI?",
     logoutErrorUnreachable:
       "No se pudo conectar con el servidor. Tu sesión sigue activa.",
     logoutErrorGeneric:
@@ -82,6 +97,63 @@ const es = {
   dashboard: {
     welcome: "Hola de nuevo, {name}. Este es el estado de tu entorno de InfraGuard AI.",
     welcomeNoName: "El estado de tu entorno de InfraGuard AI.",
+    loadError: "No se pudo cargar el panel.",
+    refreshFailed: "No se pudo actualizar el panel.",
+    refreshedAt: "Actualizado {time}",
+    kpi: {
+      total: "Activos totales",
+      critical: "Críticos",
+      operational: "Operativos",
+      degradedOffline: "Degradados / Fuera de servicio",
+      maintenance: "Mantenimiento",
+      inactive: "Inactivos",
+      hints: {
+        total: "Ver todos los activos",
+        critical: "Ver activos críticos",
+        operational: "Ver activos operativos",
+        degradedOffline: "Ver degradados y fuera de servicio",
+        maintenance: "Ver en mantenimiento",
+        inactive: "Ver activos inactivos",
+      },
+    },
+    charts: {
+      criticalityTitle: "Activos por criticidad",
+      statusTitle: "Estado operativo",
+      environmentTitle: "Activos por entorno",
+      typeTitle: "Activos por tipo",
+      clickToFilter: "Clic para filtrar",
+      empty: "Sin datos que mostrar",
+      total: "Total",
+      centerUnit: "activos",
+      tableCaption: "Datos del gráfico: {title}",
+      categoryColumn: "Categoría",
+      countColumn: "Recuento",
+      shareColumn: "Porcentaje",
+      shareOfTotal: "{percent} % del total",
+    },
+    health: {
+      operational: "Sistema operativo",
+      degraded: "Sistema degradado",
+      checking: "Comprobando el sistema…",
+      unknown: "Estado del sistema desconocido",
+      viewDetails: "Ver el estado del sistema",
+      dialogTitle: "Estado del sistema",
+    },
+    operational: {
+      title: "Estado actual",
+      viewFiltered: "Ver activos con estado {label}",
+    },
+    insight: {
+      topEnvironment: "Entorno principal",
+      topType: "Tipo predominante",
+      assets: "{count} activos",
+    },
+    recent: {
+      title: "Actualizados recientemente",
+      empty: "Aún no hay actividad de activos.",
+      viewAll: "Ver todos los activos",
+      updated: "Actualizado {time}",
+    },
     modulesTitle: "Módulos de la plataforma",
     modules: {
       authenticationDescription:
@@ -100,6 +172,16 @@ const es = {
       status: "Estado",
       memberSince: "Miembro desde",
     },
+  },
+  nav: {
+    comingSoon: "Próximamente",
+  },
+  overlay: {
+    close: "Cerrar",
+  },
+  toast: {
+    regionLabel: "Notificaciones",
+    dismiss: "Descartar notificación",
   },
   systemHealth: {
     title: "Estado del sistema",
@@ -123,8 +205,8 @@ const es = {
     },
   },
   landing: {
-    badge: "v0.3 · Base de la interfaz",
-    body: "InfraGuard AI reúne el contexto de los activos, la respuesta a incidencias y el análisis asistido por IA en un único lugar. La autenticación ya está disponible; los módulos de dominio están en desarrollo.",
+    badge: "Consola de operaciones de infraestructura",
+    body: "InfraGuard AI reúne el inventario de activos, la respuesta a incidencias y el análisis asistido por IA en una sola consola. La autenticación y el inventario de activos ya están disponibles; el resto de módulos está en desarrollo.",
     createAccount: "Crear cuenta",
     signIn: "Iniciar sesión",
     openDashboard: "Abrir panel",
@@ -203,6 +285,12 @@ const es = {
     stateAny: "Cualquier estado",
     stateActive: "Solo activos",
     stateInactive: "Solo inactivos",
+    chips: {
+      label: "Filtros activos",
+      clearAll: "Limpiar todo",
+      remove: "Quitar filtro: {label}",
+      search: "Búsqueda",
+    },
   },
   pagination: {
     summary: "{from}–{to} de {total}",
@@ -232,8 +320,8 @@ const es = {
     errorGeneric: "No se pudo guardar el activo. Revisa los campos e inténtalo de nuevo.",
     errorUnreachable: "No se pudo conectar con el servidor. Inténtalo de nuevo.",
     errorNotFound: "Este activo ya no existe.",
-    createdToast: "Activo creado.",
-    updatedToast: "Cambios guardados.",
+    createdToast: "Activo creado correctamente.",
+    updatedToast: "Activo actualizado correctamente.",
   },
   assetDetail: {
     overview: "Resumen",
@@ -250,6 +338,8 @@ const es = {
     confirm: "Confirmar",
     inactiveNotice: "Este activo está inactivo.",
     actionError: "No se pudo completar la acción. Inténtalo de nuevo.",
+    deactivatedToast: "Activo desactivado.",
+    reactivatedToast: "Activo reactivado.",
     backToList: "Volver a Assets",
     loadError: "No se pudo cargar el activo.",
     notFoundTitle: "Activo no encontrado",

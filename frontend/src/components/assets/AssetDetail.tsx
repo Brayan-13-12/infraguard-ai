@@ -7,9 +7,12 @@ import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Button, buttonClasses } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
+import { ConfirmDialog } from "@/components/ui/overlay";
+import { toast } from "@/components/ui/toast";
 import { ArrowLeftIcon, PencilIcon } from "@/components/ui/icons";
 import { LANGUAGE_LOCALES, useTranslation } from "@/i18n";
 import { deactivateAsset, reactivateAsset } from "@/services/assets";
+import { notifyAssetsChanged } from "@/lib/assetsRefresh";
 import type { Asset } from "@/types/asset";
 
 import { AssetStatusBadge, CriticalityBadge } from "./AssetBadges";
@@ -34,77 +37,123 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-function LifecycleAction({
+const notSet = (text: string) => <span className="text-muted-foreground">{text}</span>;
+
+/** The overview `<dl>` - shared by the full page and the drawer. */
+export function AssetOverview({ asset }: { asset: Asset }) {
+  const { t, language } = useTranslation();
+  const locale = LANGUAGE_LOCALES[language];
+  return (
+    <dl className="-mt-1">
+      <Row label={t("assetFields.environment")}>{environmentLabel(t, asset.environment)}</Row>
+      <Row label={t("assetFields.hostname")}>
+        {asset.hostname ?? notSet(t("assetDetail.notSet"))}
+      </Row>
+      <Row label={t("assetFields.ipAddress")}>
+        {asset.ip_address ? (
+          <code className="break-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
+            {asset.ip_address}
+          </code>
+        ) : (
+          notSet(t("assetDetail.notSet"))
+        )}
+      </Row>
+      <Row label={t("assetFields.owner")}>{asset.owner ?? notSet(t("assetDetail.notSet"))}</Row>
+      <Row label={t("assetFields.created")}>{formatDateTime(asset.created_at, locale)}</Row>
+      <Row label={t("assetFields.updated")}>{formatDateTime(asset.updated_at, locale)}</Row>
+      <Row label={t("assetFields.id")}>
+        <code className="break-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
+          {asset.id}
+        </code>
+      </Row>
+    </dl>
+  );
+}
+
+/** Description block - shared. */
+export function AssetDescription({ asset }: { asset: Asset }) {
+  const { t } = useTranslation();
+  return asset.description ? (
+    <p className="whitespace-pre-wrap text-sm text-foreground">{asset.description}</p>
+  ) : (
+    <p className="text-sm text-muted-foreground">{t("assetDetail.noDescription")}</p>
+  );
+}
+
+/**
+ * Deactivate / reactivate behind a {@link ConfirmDialog}. On success it reports
+ * the updated asset, tells the inventory list to refetch, and toasts. Shared by
+ * the full page and the drawer footer.
+ */
+export function AssetLifecycleButton({
   asset,
   onChanged,
+  size = "sm",
 }: {
   asset: Asset;
   onChanged: (asset: Asset) => void;
+  size?: "sm" | "md";
 }) {
   const { t } = useTranslation();
-  const [confirming, setConfirming] = useState(false);
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const active = asset.is_active;
 
   async function run() {
     setBusy(true);
     setError(null);
-    const res = active
-      ? await deactivateAsset(asset.id)
-      : await reactivateAsset(asset.id);
+    const res = active ? await deactivateAsset(asset.id) : await reactivateAsset(asset.id);
     setBusy(false);
     if (res.ok) {
-      setConfirming(false);
+      setOpen(false);
       onChanged(res.data);
+      notifyAssetsChanged();
+      toast({
+        tone: active ? "warning" : "success",
+        description: active
+          ? t("assetDetail.deactivatedToast")
+          : t("assetDetail.reactivatedToast"),
+      });
     } else {
       setError(t("assetDetail.actionError"));
     }
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      {error ? <Alert tone="danger">{error}</Alert> : null}
-      {confirming ? (
-        <div className="flex flex-col gap-2">
-          <p className="text-sm text-muted-foreground">
-            {active
-              ? t("assetDetail.deactivateConfirm")
-              : t("assetDetail.reactivateConfirm")}
-          </p>
-          <div className="flex items-center gap-2">
-            <Button
-              variant={active ? "danger" : "primary"}
-              size="sm"
-              loading={busy}
-              onClick={run}
-            >
-              {t("assetDetail.confirm")}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setConfirming(false)}
-              disabled={busy}
-            >
-              {t("assetForm.cancel")}
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <Button
-          variant={active ? "secondary" : "primary"}
-          size="sm"
-          onClick={() => setConfirming(true)}
-        >
-          {active ? t("assetDetail.deactivate") : t("assetDetail.reactivate")}
-        </Button>
-      )}
-    </div>
+    <>
+      <Button
+        variant={active ? "secondary" : "primary"}
+        size={size}
+        onClick={() => {
+          setError(null);
+          setOpen(true);
+        }}
+      >
+        {active ? t("assetDetail.deactivate") : t("assetDetail.reactivate")}
+      </Button>
+      <ConfirmDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        onConfirm={() => void run()}
+        title={active ? t("assetDetail.deactivate") : t("assetDetail.reactivate")}
+        description={
+          active ? t("assetDetail.deactivateConfirm") : t("assetDetail.reactivateConfirm")
+        }
+        confirmLabel={t("assetDetail.confirm")}
+        cancelLabel={t("assetForm.cancel")}
+        tone={active ? "danger" : "primary"}
+        loading={busy}
+        error={error}
+      />
+    </>
   );
 }
 
+/**
+ * Full-page asset detail. The drawer reuses {@link AssetOverview},
+ * {@link AssetDescription} and {@link AssetLifecycleButton} directly.
+ */
 export function AssetDetail({
   asset,
   onChanged,
@@ -112,8 +161,7 @@ export function AssetDetail({
   asset: Asset;
   onChanged: (asset: Asset) => void;
 }) {
-  const { t, language } = useTranslation();
-  const locale = LANGUAGE_LOCALES[language];
+  const { t } = useTranslation();
 
   return (
     <div className="flex flex-col gap-6">
@@ -157,41 +205,7 @@ export function AssetDetail({
               <CardTitle>{t("assetDetail.overview")}</CardTitle>
             </CardHeader>
             <CardContent>
-              <dl className="-mt-1">
-                <Row label={t("assetFields.environment")}>
-                  {environmentLabel(t, asset.environment)}
-                </Row>
-                <Row label={t("assetFields.hostname")}>
-                  {asset.hostname ?? (
-                    <span className="text-muted-foreground">{t("assetDetail.notSet")}</span>
-                  )}
-                </Row>
-                <Row label={t("assetFields.ipAddress")}>
-                  {asset.ip_address ? (
-                    <code className="break-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
-                      {asset.ip_address}
-                    </code>
-                  ) : (
-                    <span className="text-muted-foreground">{t("assetDetail.notSet")}</span>
-                  )}
-                </Row>
-                <Row label={t("assetFields.owner")}>
-                  {asset.owner ?? (
-                    <span className="text-muted-foreground">{t("assetDetail.notSet")}</span>
-                  )}
-                </Row>
-                <Row label={t("assetFields.created")}>
-                  {formatDateTime(asset.created_at, locale)}
-                </Row>
-                <Row label={t("assetFields.updated")}>
-                  {formatDateTime(asset.updated_at, locale)}
-                </Row>
-                <Row label={t("assetFields.id")}>
-                  <code className="break-all rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
-                    {asset.id}
-                  </code>
-                </Row>
-              </dl>
+              <AssetOverview asset={asset} />
             </CardContent>
           </Card>
 
@@ -200,15 +214,7 @@ export function AssetDetail({
               <CardTitle>{t("assetDetail.description")}</CardTitle>
             </CardHeader>
             <CardContent>
-              {asset.description ? (
-                <p className="whitespace-pre-wrap text-sm text-foreground">
-                  {asset.description}
-                </p>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  {t("assetDetail.noDescription")}
-                </p>
-              )}
+              <AssetDescription asset={asset} />
             </CardContent>
           </Card>
         </div>
@@ -226,7 +232,7 @@ export function AssetDetail({
                 <PencilIcon />
                 {t("assetDetail.edit")}
               </Link>
-              <LifecycleAction asset={asset} onChanged={onChanged} />
+              <AssetLifecycleButton asset={asset} onChanged={onChanged} />
             </CardContent>
           </Card>
 
@@ -234,9 +240,7 @@ export function AssetDetail({
             <p className="text-sm font-medium text-foreground">
               {t("assetDetail.futureTitle")}
             </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t("assetDetail.futureBody")}
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">{t("assetDetail.futureBody")}</p>
             <Badge tone="neutral" className="mt-3 text-[10px]">
               Coming soon
             </Badge>

@@ -4,7 +4,7 @@ import { AlertTriangleIcon, CheckIcon } from "./icons";
 type Tone = "info" | "success" | "warning" | "danger";
 
 const TONES: Record<Tone, { wrap: string; icon: React.ReactNode }> = {
-  info: { wrap: "border-primary/30 bg-primary/10 text-foreground", icon: null },
+  info: { wrap: "border-info/30 bg-info/10 text-foreground", icon: null },
   success: {
     wrap: "border-success/30 bg-success/10 text-foreground",
     icon: <CheckIcon className="text-success" />,

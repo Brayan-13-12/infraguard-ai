@@ -1,10 +1,12 @@
-import { ASSETS_ENDPOINT } from "@/lib/config";
+import { ASSETS_ENDPOINT, ASSETS_SUMMARY_ENDPOINT } from "@/lib/config";
 import {
   isAsset,
   isAssetPage,
+  isAssetSummary,
   type Asset,
   type AssetCreateInput,
   type AssetPage,
+  type AssetSummary,
   type AssetUpdateInput,
 } from "@/types/asset";
 
@@ -46,8 +48,10 @@ export interface AssetListParams {
   q?: string;
   assetType?: string;
   environment?: string;
-  criticality?: string;
-  status?: string;
+  /** One value or several (repeated `?criticality=` params -> `IN (...)`). */
+  criticality?: string | string[];
+  /** One value or several (repeated `?status=` params -> `IN (...)`). */
+  status?: string | string[];
   isActive?: boolean;
 }
 
@@ -117,6 +121,13 @@ function errorFor(status: number, body: unknown): AssetError {
   return { kind: "unexpected" };
 }
 
+function appendMulti(qs: URLSearchParams, key: string, value: string | string[] | undefined) {
+  if (value === undefined) return;
+  for (const v of Array.isArray(value) ? value : [value]) {
+    if (v) qs.append(key, v);
+  }
+}
+
 function buildQuery(params: AssetListParams): string {
   const qs = new URLSearchParams();
   qs.set("page", String(params.page ?? 1));
@@ -124,8 +135,8 @@ function buildQuery(params: AssetListParams): string {
   if (params.q?.trim()) qs.set("q", params.q.trim());
   if (params.assetType) qs.set("asset_type", params.assetType);
   if (params.environment) qs.set("environment", params.environment);
-  if (params.criticality) qs.set("criticality", params.criticality);
-  if (params.status) qs.set("status", params.status);
+  appendMulti(qs, "criticality", params.criticality);
+  appendMulti(qs, "status", params.status);
   if (params.isActive !== undefined) qs.set("is_active", String(params.isActive));
   return qs.toString();
 }
@@ -136,6 +147,13 @@ export async function listAssets(
   const res = await request(`${ASSETS_ENDPOINT}?${buildQuery(params)}`, { method: "GET" });
   if (res === null) return { ok: false, error: { kind: "unreachable" } };
   if (res.status === 200 && isAssetPage(res.body)) return { ok: true, data: res.body };
+  return { ok: false, error: errorFor(res.status, res.body) };
+}
+
+export async function getAssetSummary(): Promise<AssetResult<AssetSummary>> {
+  const res = await request(ASSETS_SUMMARY_ENDPOINT, { method: "GET" });
+  if (res === null) return { ok: false, error: { kind: "unreachable" } };
+  if (res.status === 200 && isAssetSummary(res.body)) return { ok: true, data: res.body };
   return { ok: false, error: errorFor(res.status, res.body) };
 }
 

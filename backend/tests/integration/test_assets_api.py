@@ -152,6 +152,101 @@ def test_filter_rejects_invalid_enum(auth_client: TestClient) -> None:
     assert auth_client.get(ASSETS, params={"environment": "Prod"}).status_code == 422
 
 
+def test_filter_by_multiple_statuses(auth_client: TestClient) -> None:
+    _create(auth_client, name="a", status="Degraded")
+    _create(auth_client, name="b", status="Offline")
+    _create(auth_client, name="c", status="Operational")
+
+    # Repeated query values -> status IN (...). Existing single-value form still works.
+    body = auth_client.get(f"{ASSETS}?status=Degraded&status=Offline").json()
+    assert body["total"] == 2
+    assert {x["name"] for x in body["items"]} == {"a", "b"}
+
+    one = auth_client.get(ASSETS, params={"status": "Offline"}).json()
+    assert one["total"] == 1 and one["items"][0]["name"] == "b"
+
+
+def test_filter_by_multiple_criticalities(auth_client: TestClient) -> None:
+    _create(auth_client, name="crit", criticality="Critical")
+    _create(auth_client, name="high", criticality="High")
+    _create(auth_client, name="low", criticality="Low")
+
+    body = auth_client.get(f"{ASSETS}?criticality=Critical&criticality=High").json()
+    assert {x["name"] for x in body["items"]} == {"crit", "high"}
+
+
+def test_multi_value_filter_rejects_invalid_enum(auth_client: TestClient) -> None:
+    assert (
+        auth_client.get(f"{ASSETS}?status=Offline&status=Nope").status_code == 422
+    )
+
+
+# --- Summary -----------------------------------------------------------------
+
+def test_summary_reports_real_aggregated_counts(auth_client: TestClient) -> None:
+    _create(auth_client, name="s1", criticality="Critical", status="Operational",
+            environment="Production", asset_type="Server")
+    _create(auth_client, name="s2", criticality="Critical", status="Offline",
+            environment="Production", asset_type="Database")
+    _create(auth_client, name="s3", criticality="Low", status="Maintenance",
+            environment="Test", asset_type="Server")
+    s4 = _create(auth_client, name="s4", criticality="Medium", status="Degraded",
+                 environment="Staging", asset_type="Application")
+    auth_client.post(f"{ASSETS}/{s4['id']}/deactivate")
+
+    body = auth_client.get(f"{ASSETS}/summary").json()
+    assert set(body) == {
+        "total", "active", "inactive",
+        "by_criticality", "by_status", "by_environment", "by_type",
+    }
+    assert body["total"] == 4
+    assert body["active"] == 3
+    assert body["inactive"] == 1
+    assert body["by_criticality"]["Critical"] == 2
+    assert body["by_status"]["Operational"] == 1
+    assert body["by_status"]["Offline"] == 1
+    assert body["by_environment"]["Production"] == 2
+    assert body["by_type"]["Server"] == 2
+    assert body["by_type"]["Database"] == 1
+
+
+def test_summary_includes_every_catalog_key_even_at_zero(auth_client: TestClient) -> None:
+    _create(auth_client, name="only", criticality="Critical", status="Operational")
+
+    body = auth_client.get(f"{ASSETS}/summary").json()
+    assert set(body["by_criticality"]) == {"Critical", "High", "Medium", "Low"}
+    assert set(body["by_status"]) == {"Operational", "Degraded", "Maintenance", "Offline"}
+    assert set(body["by_environment"]) == {"Production", "Staging", "Development", "Test"}
+    assert body["by_criticality"]["Medium"] == 0
+    assert body["by_status"]["Offline"] == 0
+
+
+def test_summary_on_empty_inventory_is_all_zero(auth_client: TestClient) -> None:
+    body = auth_client.get(f"{ASSETS}/summary").json()
+    assert body["total"] == 0 and body["active"] == 0 and body["inactive"] == 0
+    assert all(v == 0 for v in body["by_criticality"].values())
+
+
+def test_summary_requires_authentication(client: TestClient) -> None:
+    assert client.get(f"{ASSETS}/summary").status_code == 401
+
+
+def test_summary_when_database_errors_is_generic_503(
+    auth_client: TestClient, monkeypatch
+) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    def _boom(*_a, **_k):
+        raise OperationalError("SELECT", {}, Exception("connection refused"))
+
+    monkeypatch.setattr("app.api.v1.routes.assets.get_asset_summary", _boom)
+    resp = auth_client.get(f"{ASSETS}/summary")
+    assert resp.status_code == 503
+    lowered = resp.text.lower()
+    for marker in ("psycopg", "traceback", "operationalerror", "connection refused"):
+        assert marker not in lowered
+
+
 # --- Update ----------------------------------------------------------------
 
 def test_patch_updates_only_sent_fields(auth_client: TestClient) -> None:

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -35,12 +35,12 @@ function renderButton() {
   );
 }
 
-describe("LogoutButton", () => {
+describe("LogoutButton (inline)", () => {
   it("requires an explicit confirm before signing out", async () => {
     vi.spyOn(authService, "logout").mockResolvedValue({ ok: true });
     renderButton();
 
-    await userEvent.click(screen.getByRole("button", { name: /cerrar sesión/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^salir$/i }));
     // Nothing happened yet - a confirm step is shown.
     expect(authService.logout).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: /cancelar/i })).toBeInTheDocument();
@@ -51,9 +51,9 @@ describe("LogoutButton", () => {
 
   it("cancels back to the resting state", async () => {
     renderButton();
-    await userEvent.click(screen.getByRole("button", { name: /cerrar sesión/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^salir$/i }));
     await userEvent.click(screen.getByRole("button", { name: /cancelar/i }));
-    expect(screen.getByRole("button", { name: /cerrar sesión/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^salir$/i })).toBeInTheDocument();
   });
 
   it("keeps the session and explains when sign-out fails", async () => {
@@ -63,10 +63,31 @@ describe("LogoutButton", () => {
     });
     renderButton();
 
-    await userEvent.click(screen.getByRole("button", { name: /cerrar sesión/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^salir$/i }));
     await userEvent.click(screen.getByRole("button", { name: /confirmar/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/tu sesión sigue activa/i);
     expect(replace).not.toHaveBeenCalled();
+  });
+});
+
+describe("LogoutButton (collapsed rail)", () => {
+  it("opens a confirmation dialog and signs out on confirm", async () => {
+    vi.spyOn(authService, "logout").mockResolvedValue({ ok: true });
+    vi.spyOn(authService, "fetchMe").mockResolvedValue({ ok: true, data: USER });
+    render(
+      <LanguageProvider>
+        <AuthProvider>
+          <LogoutButton collapsed />
+        </AuthProvider>
+      </LanguageProvider>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /^salir$/i }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/¿deseas salir de infraguard ai\?/i);
+
+    await userEvent.click(within(dialog).getByRole("button", { name: /^salir$/i }));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/login"));
   });
 });

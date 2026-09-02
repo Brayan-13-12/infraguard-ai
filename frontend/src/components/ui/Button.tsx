@@ -8,9 +8,10 @@ export type ButtonSize = "sm" | "md";
 
 const BASE =
   "inline-flex items-center justify-center gap-2 rounded-lg font-medium " +
-  "transition-colors duration-150 outline-none " +
+  "transition-[color,background-color,border-color,transform,opacity] duration-150 outline-none " +
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring " +
-  "disabled:cursor-not-allowed disabled:opacity-55";
+  "active:scale-[0.98] motion-reduce:active:scale-100 " +
+  "disabled:cursor-not-allowed disabled:opacity-55 disabled:active:scale-100";
 
 const VARIANTS: Record<ButtonVariant, string> = {
   primary: "bg-primary text-primary-foreground hover:bg-primary-hover",

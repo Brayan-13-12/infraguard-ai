@@ -27,8 +27,11 @@ class AssetQuery:
     search: str | None = None
     asset_type: AssetType | None = None
     environment: Environment | None = None
-    criticality: Criticality | None = None
-    status: AssetStatus | None = None
+    # ``criticality`` and ``status`` accept multiple values (``... IN (...)``);
+    # an empty tuple means "no filter". A single value still works, so existing
+    # ``?status=Offline`` URLs are unchanged.
+    criticality: tuple[Criticality, ...] = ()
+    status: tuple[AssetStatus, ...] = ()
     is_active: bool | None = None
     page: int = 1
     page_size: int = 20
@@ -40,10 +43,10 @@ def _conditions(q: AssetQuery) -> list[ColumnElement[bool]]:
         conds.append(Asset.asset_type == q.asset_type.value)
     if q.environment is not None:
         conds.append(Asset.environment == q.environment.value)
-    if q.criticality is not None:
-        conds.append(Asset.criticality == q.criticality.value)
-    if q.status is not None:
-        conds.append(Asset.status == q.status.value)
+    if q.criticality:
+        conds.append(Asset.criticality.in_([c.value for c in q.criticality]))
+    if q.status:
+        conds.append(Asset.status.in_([s.value for s in q.status]))
     if q.is_active is not None:
         conds.append(Asset.is_active.is_(q.is_active))
 
@@ -81,6 +84,44 @@ def list_assets(db: Session, q: AssetQuery) -> tuple[list[Asset], int]:
         .all()
     )
     return list(rows), int(total)
+
+
+def _grouped_counts(
+    db: Session, column: ColumnElement[str], enum_cls: type
+) -> dict[str, int]:
+    """``{catalog_value: count}`` for one column, every catalog key present."""
+    counts = {member.value: 0 for member in enum_cls}
+    rows = db.execute(
+        select(column, func.count()).select_from(Asset).group_by(column)
+    ).all()
+    for value, count in rows:
+        if value in counts:
+            counts[value] = int(count)
+    return counts
+
+
+def get_asset_summary(db: Session) -> dict[str, object]:
+    """Aggregate inventory counts in a handful of ``GROUP BY`` queries.
+
+    Every catalog key appears in each breakdown even when its count is zero, so
+    the Dashboard can render a stable set of KPIs and chart slices.
+    """
+    total, active = db.execute(
+        select(
+            func.count(),
+            func.count().filter(Asset.is_active.is_(True)),
+        ).select_from(Asset)
+    ).one()
+    total, active = int(total), int(active)
+    return {
+        "total": total,
+        "active": active,
+        "inactive": total - active,
+        "by_criticality": _grouped_counts(db, Asset.criticality, Criticality),
+        "by_status": _grouped_counts(db, Asset.status, AssetStatus),
+        "by_environment": _grouped_counts(db, Asset.environment, Environment),
+        "by_type": _grouped_counts(db, Asset.asset_type, AssetType),
+    }
 
 
 def get_asset(db: Session, asset_id: uuid.UUID) -> Asset | None:

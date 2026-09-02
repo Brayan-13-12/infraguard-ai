@@ -4,6 +4,8 @@ import { cn } from "@/lib/cn";
 
 export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label: string;
+  /** Visually hide the label (kept for assistive tech). */
+  hideLabel?: boolean;
   /** Field-level error message. Renders red border + `aria-invalid` + wires `aria-describedby`. */
   error?: string;
   /** Helper text shown when there is no error. */
@@ -13,7 +15,7 @@ export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> 
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { label, error, hint, trailing, id, className, ...props },
+  { label, hideLabel = false, error, hint, trailing, id, className, ...props },
   ref,
 ) {
   const autoId = useId();
@@ -24,7 +26,10 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
 
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={inputId} className="text-sm font-medium text-foreground">
+      <label
+        htmlFor={inputId}
+        className={cn("text-sm font-medium text-foreground", hideLabel && "sr-only")}
+      >
         {label}
       </label>
       <div className="relative">

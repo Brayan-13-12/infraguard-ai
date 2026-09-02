@@ -1,12 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { LanguageProvider, useTranslation } from "@/i18n";
-import { LANGUAGE_STORAGE_KEY } from "@/i18n/config";
 
 function Probe() {
-  const { language, setLanguage, t } = useTranslation();
+  const { language, t } = useTranslation();
   return (
     <div>
       <span data-testid="lang">{language}</span>
@@ -15,8 +13,6 @@ function Probe() {
       <span data-testid="missing">
         {(t as (key: string) => string)("nope.not.here")}
       </span>
-      <button onClick={() => setLanguage("en")}>en</button>
-      <button onClick={() => setLanguage("es")}>es</button>
     </div>
   );
 }
@@ -30,7 +26,7 @@ function renderProbe() {
 }
 
 describe("LanguageProvider / useTranslation", () => {
-  it("defaults to Spanish and interpolates variables", () => {
+  it("renders Spanish and interpolates variables", () => {
     renderProbe();
     expect(screen.getByTestId("lang")).toHaveTextContent("es");
     expect(screen.getByTestId("title")).toHaveTextContent("Iniciar sesión");
@@ -42,25 +38,9 @@ describe("LanguageProvider / useTranslation", () => {
     expect(screen.getByTestId("missing")).toHaveTextContent("nope.not.here");
   });
 
-  it("switches language, updates <html lang> and persists the choice", async () => {
-    renderProbe();
-    await userEvent.click(screen.getByRole("button", { name: "en" }));
-
-    await waitFor(() => expect(screen.getByTestId("title")).toHaveTextContent("Sign in"));
-    expect(screen.getByTestId("lang")).toHaveTextContent("en");
-    expect(document.documentElement.lang).toBe("en");
-    expect(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("en");
-  });
-
-  it("restores a persisted language on mount", async () => {
-    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "en");
-    renderProbe();
-    await waitFor(() => expect(screen.getByTestId("lang")).toHaveTextContent("en"));
-    expect(screen.getByTestId("title")).toHaveTextContent("Sign in");
-  });
-
-  it("works without a provider - a Spanish fallback translator", () => {
+  it("works without a provider - the Spanish translator is the default", () => {
     render(<Probe />);
     expect(screen.getByTestId("title")).toHaveTextContent("Iniciar sesión");
+    expect(screen.getByTestId("lang")).toHaveTextContent("es");
   });
 });

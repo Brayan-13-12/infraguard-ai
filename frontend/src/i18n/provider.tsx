@@ -1,21 +1,8 @@
 "use client";
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { createContext, useContext, useMemo } from "react";
 
-import {
-  DEFAULT_LANGUAGE,
-  LANGUAGES,
-  LANGUAGE_STORAGE_KEY,
-  isLanguage,
-  type Language,
-} from "./config";
+import { DEFAULT_LANGUAGE, type Language } from "./config";
 import en from "./translations/en";
 import es, { type TranslationKey, type Translations } from "./translations/es";
 
@@ -24,10 +11,10 @@ const DICTIONARIES: Record<Language, Translations> = { es, en };
 type Vars = Record<string, string | number>;
 
 export interface LanguageContextValue {
+  /** Always {@link DEFAULT_LANGUAGE} - the UI is Spanish-only. Kept so
+   *  date/number formatting can resolve a locale. */
   language: Language;
-  languages: readonly Language[];
-  setLanguage: (language: Language) => void;
-  /** Resolve a dot-path key for the active language, with `{var}` interpolation. */
+  /** Resolve a dot-path key, with `{var}` interpolation. */
   t: (key: TranslationKey, vars?: Vars) => string;
 }
 
@@ -59,57 +46,20 @@ function makeTranslator(language: Language) {
   };
 }
 
-/** Default value - a working Spanish translator so components render without a provider. */
-const FALLBACK: LanguageContextValue = {
+const VALUE: LanguageContextValue = {
   language: DEFAULT_LANGUAGE,
-  languages: LANGUAGES,
-  setLanguage: () => {},
   t: makeTranslator(DEFAULT_LANGUAGE),
 };
 
-const LanguageContext = createContext<LanguageContextValue>(FALLBACK);
+const LanguageContext = createContext<LanguageContextValue>(VALUE);
 
 /**
- * Lightweight i18n provider (no dependency). Server and first client render use
- * {@link DEFAULT_LANGUAGE}; a persisted choice is applied in an effect after
- * mount, so there is no hydration mismatch. The choice is a non-sensitive UI
- * preference stored in `localStorage`.
+ * i18n provider (no dependency, no state). The visible UI is Spanish; this
+ * exists so components resolve typed translation keys through one place and
+ * `<html lang="es">` (set in the root layout) stays authoritative.
  */
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  const [language, setLanguageState] = useState<Language>(DEFAULT_LANGUAGE);
-
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
-      if (isLanguage(stored)) setLanguageState(stored);
-    } catch {
-      /* storage may be unavailable - keep the default */
-    }
-  }, []);
-
-  useEffect(() => {
-    document.documentElement.lang = language;
-  }, [language]);
-
-  const setLanguage = useCallback((next: Language) => {
-    setLanguageState(next);
-    try {
-      window.localStorage.setItem(LANGUAGE_STORAGE_KEY, next);
-    } catch {
-      /* ignore - the in-memory choice still applies for this session */
-    }
-  }, []);
-
-  const value = useMemo<LanguageContextValue>(
-    () => ({
-      language,
-      languages: LANGUAGES,
-      setLanguage,
-      t: makeTranslator(language),
-    }),
-    [language, setLanguage],
-  );
-
+  const value = useMemo(() => VALUE, []);
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
 }
 

@@ -89,6 +89,39 @@ export function isAsset(value: unknown): value is Asset {
   );
 }
 
+/** Aggregate inventory counts from `GET /api/v1/assets/summary`. */
+export interface AssetSummary {
+  total: number;
+  active: number;
+  inactive: number;
+  by_criticality: Record<string, number>;
+  by_status: Record<string, number>;
+  by_environment: Record<string, number>;
+  by_type: Record<string, number>;
+}
+
+function isCountMap(v: unknown): v is Record<string, number> {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    Object.values(v as Record<string, unknown>).every((n) => typeof n === "number")
+  );
+}
+
+export function isAssetSummary(value: unknown): value is AssetSummary {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.total === "number" &&
+    typeof v.active === "number" &&
+    typeof v.inactive === "number" &&
+    isCountMap(v.by_criticality) &&
+    isCountMap(v.by_status) &&
+    isCountMap(v.by_environment) &&
+    isCountMap(v.by_type)
+  );
+}
+
 export function isAssetPage(value: unknown): value is AssetPage {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;

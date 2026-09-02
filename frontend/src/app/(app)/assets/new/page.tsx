@@ -2,15 +2,16 @@
 
 import { useRouter } from "next/navigation";
 
-import { RequireAuth } from "@/components/RequireAuth";
 import { AssetForm } from "@/components/assets/AssetForm";
-import { AppShell } from "@/components/shell/AppShell";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Reveal } from "@/components/ui/Reveal";
+import { toast } from "@/components/ui/toast";
 import { useTranslation } from "@/i18n";
+import { notifyAssetsChanged } from "@/lib/assetsRefresh";
 import { createAsset } from "@/services/assets";
 
-function NewAssetContent() {
+/** Full-page "Nuevo activo" - the deep-link / refresh fallback for the drawer. */
+export default function NewAssetPage() {
   const { t } = useTranslation();
   const router = useRouter();
 
@@ -26,20 +27,14 @@ function NewAssetContent() {
         <AssetForm
           mode="create"
           onSubmit={createAsset}
-          onSuccess={(asset) => router.push(`/assets/${asset.id}`)}
+          onSuccess={(asset) => {
+            notifyAssetsChanged({ focusId: asset.id });
+            toast({ tone: "success", description: t("assetForm.createdToast") });
+            router.push("/assets");
+          }}
           onCancel={() => router.push("/assets")}
         />
       </Reveal>
     </div>
-  );
-}
-
-export default function NewAssetPage() {
-  return (
-    <RequireAuth>
-      <AppShell>
-        <NewAssetContent />
-      </AppShell>
-    </RequireAuth>
   );
 }

@@ -127,7 +127,7 @@ export function AuthForm({ mode, onSubmit, onSuccess }: AuthFormProps) {
 
   return (
     <div>
-      <div className="mb-6">
+      <div className="mb-6 pr-10">
         <h1 className="text-xl font-semibold tracking-tight text-foreground">{copy.title}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{copy.subtitle}</p>
       </div>

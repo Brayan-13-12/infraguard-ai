@@ -161,3 +161,58 @@ export const PencilIcon = (p: IconProps) => (
     <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
   </Base>
 );
+
+export const ActivityIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+  </Base>
+);
+
+export const NetworkIcon = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="12" cy="5" r="2.5" />
+    <circle cx="5" cy="19" r="2.5" />
+    <circle cx="19" cy="19" r="2.5" />
+    <path d="M12 7.5 6.5 16.8M12 7.5l5.5 9.3M7.5 19h9" />
+  </Base>
+);
+
+export const PanelLeftIcon = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M9 4v16" />
+  </Base>
+);
+
+export const LockIcon = (p: IconProps) => (
+  <Base {...p}>
+    <rect x="4.5" y="10.5" width="15" height="10" rx="2" />
+    <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
+  </Base>
+);
+
+export const ChevronRightIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="m9 18 6-6-6-6" />
+  </Base>
+);
+
+export const FilterIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M3 5h18l-7 8v6l-4 2v-8L3 5Z" />
+  </Base>
+);
+
+export const PieChartIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 3a9 9 0 1 0 9 9h-9V3Z" />
+    <path d="M14.5 3.5A9 9 0 0 1 20.5 9.5H14.5V3.5Z" />
+  </Base>
+);
+
+export const ClockIcon = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3.5 2" />
+  </Base>
+);

@@ -7,17 +7,27 @@ import { useAuth } from "@/components/AuthProvider";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { LogOutIcon } from "@/components/ui/icons";
+import { ConfirmDialog } from "@/components/ui/overlay";
 import { useTranslation } from "@/i18n";
 
 /**
- * Confirmation-gated sign-out, shared by the sidebar and the mobile drawer.
+ * Confirmation-gated sign-out, shared by the rail and the mobile drawer.
  *
- * A first click arms an explicit Confirm / Cancel step - the destructive action
- * is never one stray tap away. State is only cleared when `logout()` resolves
- * `{ ok: true }` (the HttpOnly cookie is authoritative); any failure keeps the
+ * The safe behaviour is unchanged: the destructive action is never one stray
+ * tap away, and session state is only cleared when `logout()` resolves
+ * `{ ok: true }` (the HttpOnly cookie is authoritative). Any failure keeps the
  * session and surfaces a message.
+ *
+ * `collapsed` swaps the inline Confirm/Cancel step for an icon button that opens
+ * a {@link ConfirmDialog} (the icon rail has no room for the inline step).
  */
-export function LogoutButton({ onDone }: { onDone?: () => void }) {
+export function LogoutButton({
+  onDone,
+  collapsed = false,
+}: {
+  onDone?: () => void;
+  collapsed?: boolean;
+}) {
   const { logout } = useAuth();
   const router = useRouter();
   const { t } = useTranslation();
@@ -40,6 +50,36 @@ export function LogoutButton({ onDone }: { onDone?: () => void }) {
       result.error.kind === "unreachable"
         ? t("shell.logoutErrorUnreachable")
         : t("shell.logoutErrorGeneric"),
+    );
+  }
+
+  if (collapsed) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            setError(null);
+            setConfirming(true);
+          }}
+          aria-label={t("shell.logout")}
+          title={t("shell.logout")}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-danger/10 hover:text-danger focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        >
+          <LogOutIcon />
+        </button>
+        <ConfirmDialog
+          open={confirming}
+          onClose={() => setConfirming(false)}
+          onConfirm={() => void handleLogout()}
+          title={t("shell.logoutConfirmTitle")}
+          confirmLabel={t("shell.logout")}
+          cancelLabel={t("common.cancel")}
+          tone="danger"
+          loading={loggingOut}
+          error={error}
+        />
+      </>
     );
   }
 
