@@ -156,6 +156,37 @@ describe("AssetDetailWorkspace", () => {
     expect(back).not.toHaveBeenCalled();
   });
 
+  it("moves the asset to Trash from the footer behind a confirm, then closes", async () => {
+    const del = vi.spyOn(assetService, "deleteAsset").mockResolvedValue({ ok: true, data: null });
+    const listener = vi.fn();
+    const unsub = subscribeAssetsChanged(listener);
+    renderWorkspace();
+    await screen.findByRole("dialog");
+
+    await userEvent.click(screen.getByRole("button", { name: /mover a papelera/i }));
+    expect(del).not.toHaveBeenCalled();
+    const confirm = await screen.findByRole("dialog", {
+      name: /¿mover activo a la papelera\?/i,
+    });
+    await userEvent.click(within(confirm).getByRole("button", { name: /mover a papelera/i }));
+
+    await waitFor(() => expect(del).toHaveBeenCalledWith("abc-123"));
+    expect(await screen.findByText(/activo movido a la papelera/i)).toBeInTheDocument();
+    await waitFor(() => expect(back).toHaveBeenCalled());
+    await waitFor(() => expect(listener).toHaveBeenCalled());
+    unsub();
+  });
+
+  it("shows the 'in Trash' notice instead of the detail when the asset is trashed", async () => {
+    vi.spyOn(assetService, "getAsset").mockResolvedValue({
+      ok: false,
+      error: { kind: "in_trash" },
+    });
+    renderWorkspace();
+    expect(await screen.findByText(/en la papelera/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /ver en trash/i })).toHaveAttribute("href", "/trash");
+  });
+
   it("deactivates from the footer behind a confirm and toasts + notifies", async () => {
     vi.spyOn(assetService, "deactivateAsset").mockResolvedValue({
       ok: true,

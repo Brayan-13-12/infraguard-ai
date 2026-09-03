@@ -33,17 +33,23 @@ export default function EditAssetPage() {
             </div>
           );
         }
-        if (state.kind === "notfound" || state.kind === "error") {
+        if (state.kind !== "ready") {
           return (
             <EmptyState
               icon={<BoxIcon />}
               title={
-                state.kind === "notfound"
-                  ? t("assetDetail.notFoundTitle")
-                  : t("assetDetail.loadError")
+                state.kind === "error"
+                  ? t("assetDetail.loadError")
+                  : state.kind === "gone"
+                    ? t("assetDetail.inTrashTitle")
+                    : t("assetDetail.notFoundTitle")
               }
               description={
-                state.kind === "notfound" ? t("assetDetail.notFoundBody") : undefined
+                state.kind === "gone"
+                  ? t("assetDetail.inTrashBody")
+                  : state.kind === "notfound"
+                    ? t("assetDetail.notFoundBody")
+                    : undefined
               }
               action={
                 <div className="flex gap-2">

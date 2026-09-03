@@ -111,6 +111,48 @@ describe("AssetDetail (full page)", () => {
     expect(spy).toHaveBeenCalledWith("abc-123");
   });
 
+  it("moves the asset to Trash behind a confirm step, then toasts and calls onDeleted", async () => {
+    const del = vi.spyOn(assetService, "deleteAsset").mockResolvedValue({ ok: true, data: null });
+    const onDeleted = vi.fn();
+    render(
+      <LanguageProvider>
+        <AssetDetail asset={ASSET} onChanged={vi.fn()} onDeleted={onDeleted} />
+        <Toaster />
+      </LanguageProvider>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /mover a papelera/i }));
+    expect(del).not.toHaveBeenCalled();
+
+    const dialog = await screen.findByRole("dialog", { name: /¿mover activo a la papelera\?/i });
+    await userEvent.click(within(dialog).getByRole("button", { name: /mover a papelera/i }));
+
+    await waitFor(() => expect(del).toHaveBeenCalledWith("abc-123"));
+    await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+    expect(await screen.findByText(/activo movido a la papelera/i)).toBeInTheDocument();
+  });
+
+  it("keeps the confirm dialog open and shows an error when the soft delete fails", async () => {
+    vi.spyOn(assetService, "deleteAsset").mockResolvedValue({
+      ok: false,
+      error: { kind: "unreachable" },
+    });
+    const onDeleted = vi.fn();
+    render(
+      <LanguageProvider>
+        <AssetDetail asset={ASSET} onChanged={vi.fn()} onDeleted={onDeleted} />
+        <Toaster />
+      </LanguageProvider>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /mover a papelera/i }));
+    const dialog = await screen.findByRole("dialog", { name: /¿mover activo a la papelera\?/i });
+    await userEvent.click(within(dialog).getByRole("button", { name: /mover a papelera/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/no se pudo mover el activo/i);
+    expect(onDeleted).not.toHaveBeenCalled();
+  });
+
   it("surfaces an error when the lifecycle action fails", async () => {
     vi.spyOn(assetService, "deactivateAsset").mockResolvedValue({
       ok: false,

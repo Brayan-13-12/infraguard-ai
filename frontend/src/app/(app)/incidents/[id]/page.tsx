@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
 import { IncidentDetail } from "@/components/incidents/IncidentDetail";
 import { IncidentDetailLoader } from "@/components/incidents/IncidentDetailLoader";
+import { InTrashNotice } from "@/components/trash/InTrashNotice";
 import { Button, buttonClasses } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Reveal } from "@/components/ui/Reveal";
@@ -15,6 +16,7 @@ import { useTranslation } from "@/i18n";
 /** Full-page incident detail - the deep-link / refresh fallback for the drawer. */
 export default function IncidentDetailPage() {
   const { t } = useTranslation();
+  const router = useRouter();
   const { id } = useParams<{ id: string }>();
 
   return (
@@ -26,6 +28,13 @@ export default function IncidentDetailPage() {
             <div className="flex justify-center py-20">
               <Spinner decorative />
             </div>
+          );
+        }
+        if (state.kind === "gone") {
+          return (
+            <Reveal>
+              <InTrashNotice kind="incidents" />
+            </Reveal>
           );
         }
         if (state.kind === "notfound" || state.kind === "error") {
@@ -60,7 +69,11 @@ export default function IncidentDetailPage() {
         }
         return (
           <Reveal>
-            <IncidentDetail incident={state.incident} onChanged={setIncident} />
+            <IncidentDetail
+              incident={state.incident}
+              onChanged={setIncident}
+              onDeleted={() => router.push("/incidents")}
+            />
           </Reveal>
         );
       }}

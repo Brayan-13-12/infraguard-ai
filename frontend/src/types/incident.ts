@@ -67,6 +67,9 @@ export interface IncidentAssetRef {
   criticality: string;
   status: string;
   is_active: boolean;
+  /** Non-null when the asset has been moved to Trash - the relationship is kept
+   *  (history) and the UI badges it "En papelera". */
+  deleted_at: string | null;
 }
 
 export interface IncidentEvent {

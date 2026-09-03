@@ -177,4 +177,29 @@ describe("AuditTimeline", () => {
     expect(link.className).toContain("before:bg-audit-create/80");
     expect(link.className).toContain("bg-surface"); // card body stays neutral
   });
+
+  it("renders a DELETE event in the red family: title, icon, rail, accent, label", () => {
+    const { container } = renderTimeline([
+      ev({ id: "d1", action: "DELETE", entity_type: "Asset", entity_label: "payments-db" }),
+      ev({ id: "d2", action: "DELETE", entity_type: "Asset", entity_label: "web-01" }),
+    ]);
+    const [link] = screen.getAllByRole("link", { name: /activo eliminado/i });
+    expect(link).toHaveAttribute("href", "/audit/d1");
+    expect(within(link!).getByText("payments-db")).toBeInTheDocument();
+    const [node] = screen.getAllByRole("img", { name: "Eliminación" });
+    expect(node!.className).toContain("text-audit-delete");
+    expect(link!.className).toContain("before:bg-audit-delete/85");
+    const rail = container.querySelector("[data-timeline-rail]");
+    expect(rail?.className).toContain("bg-audit-delete");
+  });
+
+  it("renders a RESTORE event in the violet family with restored-entity copy", () => {
+    renderTimeline([
+      ev({ id: "r1", action: "RESTORE", entity_type: "Incident", entity_label: "API down" }),
+    ]);
+    expect(screen.getByText("Incidente restaurado")).toBeInTheDocument();
+    const node = screen.getByRole("img", { name: "Restauración" });
+    expect(node.className).toContain("text-audit-restore");
+    expect(screen.getByRole("link").className).toContain("before:bg-audit-restore/80");
+  });
 });

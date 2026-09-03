@@ -44,6 +44,7 @@ const DETAIL: IncidentDetail = {
       criticality: "Critical",
       status: "Operational",
       is_active: true,
+      deleted_at: null,
     },
   ],
   timeline: [
@@ -219,6 +220,38 @@ describe("IncidentDetailWorkspace", () => {
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.getAllByRole("dialog").length).toBe(1));
     expect(back).not.toHaveBeenCalled();
+  });
+
+  it("moves the incident to Trash from the footer behind a confirm, then closes", async () => {
+    const del = vi
+      .spyOn(incidentService, "deleteIncident")
+      .mockResolvedValue({ ok: true, data: null });
+    renderWorkspace();
+    await screen.findByRole("dialog");
+
+    await userEvent.click(screen.getByRole("button", { name: /mover a papelera/i }));
+    expect(del).not.toHaveBeenCalled();
+    const confirm = await screen.findByRole("dialog", {
+      name: /¿mover incidente a la papelera\?/i,
+    });
+    await userEvent.click(within(confirm).getByRole("button", { name: /mover a papelera/i }));
+
+    await waitFor(() => expect(del).toHaveBeenCalledWith("abc-123"));
+    expect(await screen.findByText(/incidente movido a la papelera/i)).toBeInTheDocument();
+    await waitFor(() => expect(back).toHaveBeenCalled());
+  });
+
+  it("shows the 'in Trash' notice instead of the detail when the incident is trashed", async () => {
+    vi.spyOn(incidentService, "getIncident").mockResolvedValue({
+      ok: false,
+      error: { kind: "in_trash" },
+    });
+    renderWorkspace();
+    expect(await screen.findByText(/en la papelera/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /ver en trash/i })).toHaveAttribute(
+      "href",
+      "/trash?type=incidents",
+    );
   });
 
   it("resolves from the footer behind a confirm", async () => {

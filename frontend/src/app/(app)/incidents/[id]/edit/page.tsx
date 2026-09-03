@@ -33,17 +33,23 @@ export default function EditIncidentPage() {
             </div>
           );
         }
-        if (state.kind === "notfound" || state.kind === "error") {
+        if (state.kind !== "ready") {
           return (
             <EmptyState
               icon={<ShieldIcon />}
               title={
-                state.kind === "notfound"
-                  ? t("incidentDetail.notFoundTitle")
-                  : t("incidentDetail.loadError")
+                state.kind === "error"
+                  ? t("incidentDetail.loadError")
+                  : state.kind === "gone"
+                    ? t("incidentDetail.inTrashTitle")
+                    : t("incidentDetail.notFoundTitle")
               }
               description={
-                state.kind === "notfound" ? t("incidentDetail.notFoundBody") : undefined
+                state.kind === "gone"
+                  ? t("incidentDetail.inTrashBody")
+                  : state.kind === "notfound"
+                    ? t("incidentDetail.notFoundBody")
+                    : undefined
               }
               action={
                 <div className="flex gap-2">

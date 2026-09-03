@@ -236,6 +236,10 @@ export function auditEventTitle(
       return t("audit.eventTitle.resolved", { entity });
     case "REOPENED":
       return t("audit.eventTitle.reopened", { entity });
+    case "DELETE":
+      return t("audit.eventTitle.deleted", { entity });
+    case "RESTORE":
+      return t("audit.eventTitle.restored", { entity });
     default:
       return auditActionLabel(t, action);
   }

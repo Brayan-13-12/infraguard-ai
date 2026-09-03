@@ -8,11 +8,17 @@
 * ``POST  /api/v1/incidents/{id}/resolve``    - move to Resolved (idempotent)
 * ``POST  /api/v1/incidents/{id}/reopen``     - move a terminal incident back to Open
 * ``POST  /api/v1/incidents/{id}/comments``   - append a COMMENT timeline entry
+* ``DELETE /api/v1/incidents/{id}``           - move to Trash (soft delete, recoverable)
 
 Every endpoint requires an authenticated, active user (``get_current_user`` at
 the router level). State-changing methods additionally pass the CSRF origin
 check. ``created_by`` / actor identity is always taken from the authenticated
 user - never from the request body.
+
+``DELETE`` is a **soft delete**: the timeline, affected-asset links and every
+timestamp are left intact so a restore is lossless. There is no permanent purge
+(deferred to RBAC). Normal reads reject a trashed incident with ``410 Gone``.
+Future RBAC permission boundary: ``incidents.delete``.
 """
 
 from __future__ import annotations
@@ -68,6 +74,7 @@ from app.services.incidents import (
     resolve_incident,
     update_incident,
 )
+from app.services.trash import soft_delete_incident
 
 router = APIRouter(
     prefix="/incidents",
@@ -77,6 +84,13 @@ router = APIRouter(
 
 _NOT_FOUND = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found"
+)
+_IN_TRASH = HTTPException(
+    status_code=status.HTTP_410_GONE,
+    detail="This incident is in Trash. Restore it to make changes.",
+)
+_ALREADY_TRASHED = HTTPException(
+    status_code=status.HTTP_409_CONFLICT, detail="Incident is already in Trash"
 )
 
 _SORTS = ("recent", "oldest", "started", "severity")
@@ -99,6 +113,8 @@ def _load(db: Session, incident_id: uuid.UUID):
     incident = get_incident(db, incident_id)
     if incident is None:
         raise _NOT_FOUND
+    if incident.deleted_at is not None:
+        raise _IN_TRASH
     return incident
 
 
@@ -264,6 +280,8 @@ def _detail_or_404(db: Session, incident_id: uuid.UUID) -> IncidentRead:
     detail = get_incident_detail(db, incident_id)
     if detail is None:
         raise _NOT_FOUND
+    if detail.incident.deleted_at is not None:
+        raise _IN_TRASH
     return _incident_read(detail)
 
 
@@ -461,3 +479,43 @@ def add_comment_endpoint(
         actor_email=current_user.email,
         created_at=event.created_at,
     )
+
+
+@router.delete(
+    "/{incident_id}",
+    response_model=MessageResponse,
+    summary="Move an incident to Trash (soft delete, recoverable)",
+    responses={
+        404: {"model": MessageResponse},
+        409: {"model": MessageResponse, "description": "Already in Trash"},
+    },
+    dependencies=[Depends(require_trusted_origin)],
+)
+def delete_incident_endpoint(
+    incident_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    ctx: AuditContext = Depends(get_audit_context),
+) -> MessageResponse:
+    incident = get_incident(db, incident_id)
+    if incident is None:
+        raise _NOT_FOUND
+    if incident.deleted_at is not None:
+        raise _ALREADY_TRASHED
+
+    soft_delete_incident(db, incident, actor=current_user)
+    record_event(
+        db,
+        ctx=ctx,
+        action=AuditAction.DELETE,
+        entity_type=AuditEntityType.INCIDENT,
+        entity_id=incident.id,
+        entity_label=incident.title,
+        metadata={
+            "severity": incident.severity,
+            "priority": incident.priority,
+            "status": incident.status,
+        },
+    )
+    db.commit()
+    return MessageResponse(detail="Incident moved to Trash")

@@ -61,6 +61,14 @@ export const INCIDENT_LIMITS = {
   maxAssetLinks: 200,
 } as const;
 
+/** Trash / Restore API (Governance & Administration - Phase 2). */
+export const TRASH_ENDPOINT = `${v1}/trash`;
+
+/** Trash pagination defaults - mirror the backend (app/schemas/trash.py). */
+export const TRASH_ASSETS_PAGE_SIZE = 20;
+export const TRASH_INCIDENTS_PAGE_SIZE = 15;
+export const TRASH_MAX_PAGE_SIZE = 100;
+
 /** Audit log API (read-only, append-only - Governance & Administration Phase 1). */
 export const AUDIT_ENDPOINT = `${v1}/audit`;
 

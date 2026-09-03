@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import { AssetStatusBadge, CriticalityBadge } from "@/components/assets/AssetBadges";
 import { assetTypeLabel, environmentLabel } from "@/components/assets/catalog";
 import { Alert } from "@/components/ui/Alert";
+import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { DetailRow, NotSet } from "@/components/ui/DetailRow";
 import {
@@ -16,12 +17,14 @@ import {
 import { Tabs, tabPanelProps, useTabsId } from "@/components/ui/Tabs";
 import { ConfirmDialog } from "@/components/ui/overlay";
 import { toast } from "@/components/ui/toast";
-import { ArrowLeftIcon, PencilIcon } from "@/components/ui/icons";
+import { ArrowLeftIcon, PencilIcon, TrashIcon } from "@/components/ui/icons";
 import { LANGUAGE_LOCALES, useTranslation, type TranslationKey } from "@/i18n";
 import { INCIDENT_LIMITS } from "@/lib/config";
 import { isoToLocalInput, localInputToIso } from "@/lib/datetime";
 import { notifyIncidentsChanged } from "@/lib/incidentsRefresh";
+import { notifyTrashChanged } from "@/lib/trashRefresh";
 import {
+  deleteIncident,
   reopenIncident,
   resolveIncident,
   updateIncident,
@@ -96,12 +99,83 @@ export function IncidentAffectedAssets({ incident }: { incident: IncidentDetailT
             {environmentLabel(t, a.environment as Environment)}
           </span>
           <span className="ml-auto flex items-center gap-1.5">
+            {a.deleted_at ? (
+              <Badge tone="neutral" className="text-[10px]">
+                {t("incidentDetail.assetInTrash")}
+              </Badge>
+            ) : null}
             <CriticalityBadge value={a.criticality as Criticality} />
             <AssetStatusBadge value={a.status as AssetStatus} />
           </span>
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * "Move to Trash" - a restrained, non-primary destructive action (soft delete
+ * of the incident; its timeline and affected-asset links are preserved). Behind
+ * a {@link ConfirmDialog}. On success it refreshes the incident + Trash lists,
+ * toasts and calls `onDeleted`. Recoverable from `/trash`.
+ */
+export function MoveIncidentToTrashButton({
+  incident,
+  onDeleted,
+  size = "sm",
+}: {
+  incident: IncidentDetailT;
+  onDeleted: () => void;
+  size?: "sm" | "md";
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    const res = await deleteIncident(incident.id);
+    setBusy(false);
+    if (res.ok) {
+      setOpen(false);
+      notifyIncidentsChanged();
+      notifyTrashChanged({ scope: "incidents" });
+      toast({ tone: "warning", description: t("incidentDetail.movedToTrashToast") });
+      onDeleted();
+    } else {
+      setError(t("incidentDetail.moveToTrashError"));
+    }
+  }
+
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size={size}
+        className="text-danger hover:bg-danger/10 hover:text-danger"
+        onClick={() => {
+          setError(null);
+          setOpen(true);
+        }}
+      >
+        <TrashIcon className="h-3.5 w-3.5" />
+        {t("incidentDetail.moveToTrash")}
+      </Button>
+      <ConfirmDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        onConfirm={() => void run()}
+        title={t("incidentDetail.moveToTrashTitle")}
+        description={t("incidentDetail.moveToTrashBody", { title: incident.title })}
+        confirmLabel={t("incidentDetail.moveToTrashConfirm")}
+        cancelLabel={t("incidentForm.cancel")}
+        tone="danger"
+        loading={busy}
+        error={error}
+      />
+    </>
   );
 }
 
@@ -496,9 +570,12 @@ export function IncidentDetailContent({
 export function IncidentDetail({
   incident,
   onChanged,
+  onDeleted,
 }: {
   incident: IncidentDetailT;
   onChanged: (incident: IncidentDetailT) => void;
+  /** Called after a successful "Move to Trash" (the page navigates to /incidents). */
+  onDeleted?: () => void;
 }) {
   const { t } = useTranslation();
 
@@ -521,7 +598,10 @@ export function IncidentDetail({
             <IncidentDetailBadges incident={incident} />
           </div>
         </div>
-        <IncidentLifecycleActions incident={incident} onChanged={onChanged} />
+        <div className="flex flex-wrap items-center gap-2">
+          <MoveIncidentToTrashButton incident={incident} onDeleted={onDeleted ?? (() => {})} />
+          <IncidentLifecycleActions incident={incident} onChanged={onChanged} />
+        </div>
       </header>
 
       <div className="rounded-xl border border-border bg-surface p-5 sm:p-6">

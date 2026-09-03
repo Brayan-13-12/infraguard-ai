@@ -21,7 +21,17 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Index, String, Text, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -91,6 +101,13 @@ class Asset(Base):
         Index("ix_assets_status", "status"),
         Index("ix_assets_is_active", "is_active"),
         Index("ix_assets_created_at", "created_at"),
+        # Every normal query filters ``deleted_at IS NULL``; Trash filters the
+        # opposite. A partial index keeps the common "active" scan cheap.
+        Index(
+            "ix_assets_deleted_at",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -114,6 +131,22 @@ class Asset(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
+
+    # --- Soft delete (Trash) -------------------------------------------------
+    # ``deleted_at IS NULL`` -> live record; a timestamp -> moved to Trash and
+    # excluded from every normal query / summary / picker. Restorable with the
+    # same id and full history. ``deleted_by`` is a snapshot FK (SET NULL if the
+    # user is later removed); the actor is always the authenticated session,
+    # never a request-body value.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

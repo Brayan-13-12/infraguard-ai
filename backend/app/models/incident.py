@@ -141,6 +141,11 @@ class Incident(Base):
         Index("ix_incidents_started_at", "started_at"),
         Index("ix_incidents_updated_at", "updated_at"),
         Index("ix_incidents_created_at", "created_at"),
+        Index(
+            "ix_incidents_deleted_at",
+            "deleted_at",
+            postgresql_where=text("deleted_at IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -178,6 +183,21 @@ class Incident(Base):
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
     )
+
+    # --- Soft delete (Trash) -----------------------------------------------
+    # ``deleted_at IS NULL`` -> live incident; a timestamp -> in Trash and hidden
+    # from every normal list / summary. The timeline, affected-asset links and
+    # all metadata are left untouched so a restore is byte-for-byte the same
+    # incident. Actor is the authenticated session, never a request-body value.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -30,6 +30,10 @@ src/
 │   │   ├── overlay/      Overlay · Dialog · Drawer · ConfirmDialog · WorkspaceDialog  (stacked-safe)
 │   │   ├── toast/        Toaster · toast() / useToast() (no library)
 │   │   └── chart/        DonutChart · HorizontalBarChart · ChartDataTable · …
+│   ├── audit/            AuditBrowser · AuditTimeline · AuditDetail · catalog (semantic colours)
+│   ├── trash/            TrashBrowser · TrashAssetsList · TrashIncidentsList ·
+│   │                     TrashDetailWorkspace · TrashAssetDetail · TrashIncidentDetail ·
+│   │                     TrashDetailLoader · RestoreAction · InTrashNotice · TrashListSkeleton · catalog
 │   ├── theme/ · auth/ · dashboard/
 │   ├── shell/            AppShell · AuthenticatedShell · Sidebar · SidebarFooter ·
 │   │                     Topbar · MobileNav · NavList · LogoutButton
@@ -59,9 +63,9 @@ src/
   dot-path key and supports `{var}` interpolation. Resolution falls back
   active-language → Spanish → the key itself.
 - **Fixed English** - product/module proper nouns: `InfraGuard AI`, the sidebar
-  nav labels (`Dashboard`, `Assets`, `Incidents`, `Audit`, `AI Assistant`,
-  `Settings`), the `Dashboard` / `Audit` page headings, and the `Coming soon` /
-  `soon` marker. Proper
+  nav labels (`Dashboard`, `Assets`, `Incidents`, `Audit`, `Trash`,
+  `AI Assistant`, `Settings`), the `Dashboard` / `Audit` / `Trash` page headings,
+  and the `Coming soon` / `soon` marker. Proper
   nouns ("PostgreSQL", "Argon2id", "HttpOnly") and user data (emails, UUIDs) are
   never translated.
 
@@ -181,8 +185,8 @@ The **rail** (`Sidebar`, `--sidebar` tokens) is a flex column: brand + footer
 ~68px, 200ms width transition, choice persisted in `localStorage` -
 non-sensitive); collapsed shows icons only with hover/focus tooltips and the
 label as the accessible name. Navigation (`src/lib/navigation.ts` → `NAV_ITEMS`)
-is a **single flat list** - Dashboard, Assets, Incidents, Audit, AI Assistant,
-Settings, **no section headings**. The active item gets a primary-tinted fill, primary
+is a **single flat list** - Dashboard, Assets, Incidents, Audit, Trash,
+AI Assistant, Settings, **no section headings**. The active item gets a primary-tinted fill, primary
 text/icon and a left accent bar (`aria-current="page"`); future items are
 `aria-disabled`, not links, with a quiet lock marker and a "Próximamente"
 tooltip. The footer: a compact identity row (avatar + email + theme toggle) over
@@ -390,9 +394,11 @@ found the table made every event look alike and hid "what changed").
   plus/pencil/swap/check/rotate/link/log-in/log-out/**trash**/**unarchive**.
   Hover strengthens the node ring + accent and lifts the card 1px
   (`motion-safe:`), showing *"Ver detalle →"*.
-- **`DELETE` / `RESTORE`** visuals are defined in the catalog now (they are
-  already valid backend + frontend action values) so the timeline is ready when
-  the Trash module starts emitting them - **no Trash behaviour is implemented**.
+- **`DELETE` / `RESTORE`** events render fully in the timeline and the detail
+  header - *"{Entidad} eliminado"* (red) / *"{Entidad} restaurado"* (violet),
+  trash / unarchive icon, matching rail segment + card accent. They are added to
+  `FILTERABLE_AUDIT_ACTIONS`. The `"Ver …"` deep-link keeps working for a record
+  that is currently in Trash (it lands on the "in Trash" notice).
 - **Pagination = "Cargar más"** (decision): appends the next **server-side** page
   (`AUDIT_PAGE_SIZE` = 25), de-dupes by event id, shows `{loaded} de {total}` and
   an end-of-history marker. A chronological history reads as a feed; N/M paging
@@ -414,8 +420,68 @@ found the table made every event look alike and hid "what changed").
 - **Service layer** (`services/audit.ts`) never throws - typed `AuditResult<T>`;
   `credentials: "include"`; runtime type-guards on every response (incl. the new
   `change_preview` array). There is **no create / update / delete** - read-only.
-- Retention/pruning, RBAC-gated access and Trash are **future** Governance phases
-  and are not implied anywhere in the UI.
+- Retention/pruning and RBAC-gated access are **future** Governance phases and
+  are not implied anywhere in the UI.
+
+## Trash / restore (governance & administration - Phase 2)
+
+A fifth **active** nav item, **`Trash`** (English proper noun), between `Audit`
+and the disabled `AI Assistant` (`Dashboard · Assets · Incidents · Audit · Trash
+· AI Assistant · Settings`).
+
+```
+(app)/trash/
+  layout.tsx  → {children}{modal}
+  page.tsx    → TrashBrowser (Suspense)
+  assets/[id]/ · incidents/[id]/          full-page read-only detail fallbacks
+  @modal/(.)assets/[id]/ · (.)incidents/[id]/  route-aware TrashDetailWorkspace
+```
+
+`assets` / `incidents` are **static** siblings under `/trash`, so the
+interceptors only ever receive a real id - no `new` / `edit` dispatch needed.
+
+- **`/trash`** (`TrashBrowser`): header **"Trash"** + Spanish subtitle
+  (*"Elementos eliminados que pueden restaurarse."*), a **thin one-line** summary
+  strip (*Activos eliminados: N · Incidentes eliminados: N* - no KPI cards), and
+  a **tabbed** workspace - `Assets (3)` / `Incidents (2)` with live counts. The
+  tab is **URL-backed** (`/trash?type=assets|incidents`) - shareable,
+  Back/Forward-friendly, keyboard accessible. Entity types never mix.
+- **Filters** (collapsible, server-side, mirrored to the URL): search + `Tipo` /
+  `Criticidad` (assets) or `Severidad` / `Estado` (incidents) + `Eliminado por` /
+  `Eliminado desde` / `Eliminado hasta`. **Real server-side pagination**
+  (`Pagination`; assets 20 / incidents 15 per page).
+- **Lists** (`TrashAssetsList` / `TrashIncidentsList`): desktop table + mobile
+  cards. Columns include **Deleted by** / **Deleted at**. Row actions are **View**
+  and **Restore** only - **no Edit** while trashed.
+- **Detail** (`TrashDetailWorkspace` → `TrashAssetDetailContent` /
+  `TrashIncidentDetailContent`): a centered read-only `WorkspaceDialog` (distinct
+  from the live `/assets/{id}` route). Shows every field + `Created` / `Updated` /
+  `Deleted by` / `Deleted at` / `ID`; incidents also show the **timeline** and
+  **affected assets** (trashed ones badged *En papelera*). Primary (only) action:
+  **Restore**, behind a `ConfirmDialog`.
+- **Move to Trash** lives in the Asset and Incident **detail** workspaces as a
+  restrained, non-primary `text-danger` ghost button behind a `ConfirmDialog`
+  (*"¿Mover activo a la papelera?"*). On success: the detail closes, the list
+  refreshes in place (keeping filters/page via `notifyAssetsChanged()` /
+  `notifyIncidentsChanged()`), and a toast confirms.
+- **Restore** (`RestoreAction`): on success it fires `notifyTrashChanged()` **and**
+  the operational-list bus, toasts (*"Activo restaurado correctamente."*), and
+  closes / navigates back. The row leaves Trash and reappears in the live module.
+- **Normal route on a trashed record** → the service maps `410` →
+  `{ kind: "in_trash" }` → loader state `"gone"` → **`InTrashNotice`** (a small
+  *"Este activo está en la papelera"* panel + *"Ver en Trash"* link), **not** a
+  bare 404. (Spec §28 Option B.)
+- **Service layer** (`services/trash.ts`): typed `TrashResult<T>`,
+  `credentials: "include"`, runtime type-guards on every response. Read + restore
+  only - **there is no delete-forever call**.
+- Loading uses `TrashListSkeleton` / `TrashDetailSkeleton` (no global spinners).
+  Empty: *"No hay activos en la papelera."* + support line; filtered-empty offers
+  *"Limpiar filtros"*.
+- **Visual language:** neutral surfaces, a subtle red accent for the deleted
+  state, violet for restore - the page is **not** red. Feels like a recovery
+  workspace, not a danger zone.
+- **Permanent purge is not implemented** (deferred to RBAC); the UI never offers
+  "Eliminar definitivamente".
 
 ## Auth screen
 
@@ -464,3 +530,14 @@ service wrappers (incl. `getAssetSummary` + repeated multi-value params),
 `assetValidation`, `AssetForm`, `AssetsTable`, `AssetsBrowser` (loading / empty /
 error+retry / search / filter / pagination / count / **active-filter chips**),
 and `AssetDetail`.
+
+The **audit module** (`catalog` semantic-colour families incl. `DELETE` /
+`RESTORE`, `AuditTimeline` incl. `DELETE` red / `RESTORE` violet rendering,
+`AuditDetail`, `AuditBrowser`, `AuditChangePreview`) and the **Trash module**:
+`services/trash` (query building + status mapping), `TrashBrowser` (tabs / counts
+/ loading / empty / error / filter-URL / debounced search), `RestoreAction`
+(confirm / toast / callback / error), the `/trash` modal routing +
+`TrashDetailWorkspace` (read-only, restore, not-found), the Sidebar `Trash` nav
+item, and the **Move to Trash** flow on `AssetDetail` / `AssetDetailWorkspace` /
+`IncidentDetailWorkspace` (confirm → soft delete → toast → detail closes → list
+refresh) plus the `410` → `InTrashNotice` behaviour on the normal detail routes.

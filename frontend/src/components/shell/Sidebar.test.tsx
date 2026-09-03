@@ -32,6 +32,7 @@ const MODULE_LABELS = [
   "Assets",
   "Incidents",
   "Audit",
+  "Trash",
   "AI Assistant",
   "Settings",
 ];
@@ -81,6 +82,16 @@ describe("Sidebar", () => {
     renderSidebar();
     expect(screen.getByRole("link", { name: "Audit" })).toHaveAttribute("href", "/audit");
     expect(screen.queryByText("Auditoría")).not.toBeInTheDocument();
+  });
+
+  it("links Trash as an active route, after Audit, with an English label", () => {
+    renderSidebar();
+    const trash = screen.getByRole("link", { name: "Trash" });
+    expect(trash).toHaveAttribute("href", "/trash");
+    expect(screen.queryByText("Papelera")).not.toBeInTheDocument();
+
+    const links = screen.getAllByRole("link").map((a) => a.getAttribute("href"));
+    expect(links.indexOf("/trash")).toBeGreaterThan(links.indexOf("/audit"));
   });
 
   it("is a single flat list with no visible section headings", () => {
