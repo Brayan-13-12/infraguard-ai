@@ -244,8 +244,8 @@ jobs:
 
           echo "admin approves the request as Viewer"
           VROLE=$(curl -s -b "$ADMIN" "$API/admin/roles" | python3 -c "import sys,json; print(next(r['id'] for r in json.load(sys.stdin)['items'] if r['slug']=='viewer'))")
-          UID=$(curl -s -b "$ADMIN" "$API/admin/access-requests" | python3 -c "import sys,json; print([u for u in json.load(sys.stdin)['items'] if u['email']=='$EMAIL'][0]['id'])")
-          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$ADMIN" -H "$ORIGIN" -H "$CT" -X POST -d "{\"role_ids\":[\"$VROLE\"]}" "$API/admin/users/$UID/approve")" = "200"
+          ACCESS_REQUEST_USER_ID=$(curl -s -b "$ADMIN" "$API/admin/access-requests" | python3 -c "import sys,json; print([u for u in json.load(sys.stdin)['items'] if u['email']=='$EMAIL'][0]['id'])")
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$ADMIN" -H "$ORIGIN" -H "$CT" -X POST -d "{\"role_ids\":[\"$VROLE\"]}" "$API/admin/users/$ACCESS_REQUEST_USER_ID/approve")" = "200"
 
           echo "login -> 200 + cookie"
           test "$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -H "$ORIGIN" -H "$CT" -d "$BODY" "$BASE/login")" = "200"
