@@ -66,6 +66,11 @@ x-backend-env: &backend-env
   # Fallback kept in step with the backend config default (app/core/config.py).
   JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-30}
   AUTH_COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-lax}
+  # Best-effort in-process auth rate limit. Defaults match app/core/config.py
+  # (10 attempts / 60s). CI's sequential smoke suite makes a burst of *legitimate*
+  # logins from a single Docker-gateway IP, so it raises the ceiling via env.
+  AUTH_RATE_LIMIT_MAX_ATTEMPTS: ${AUTH_RATE_LIMIT_MAX_ATTEMPTS:-10}
+  AUTH_RATE_LIMIT_WINDOW_SECONDS: ${AUTH_RATE_LIMIT_WINDOW_SECONDS:-60}
   # --- Bootstrap Administrator (Governance Phase 3) ---
   # Consumed only by the one-shot `bootstrap` job below. Public registration
   # never creates an Administrator; this is the sole deterministic path.

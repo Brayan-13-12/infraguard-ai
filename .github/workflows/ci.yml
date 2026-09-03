@@ -103,6 +103,11 @@ jobs:
       # registration never creates an Administrator - this is the only path.
       BOOTSTRAP_ADMIN_EMAIL: ci-admin@example.com
       BOOTSTRAP_ADMIN_PASSWORD: a-ci-only-passphrase
+      # The smoke steps run back-to-back and legitimately perform dozens of auth
+      # calls from one Docker-gateway IP. Raise the best-effort in-process rate
+      # limit so it does not false-positive (the product default stays 10/60s;
+      # brute-force protection itself is covered by `test_login_is_rate_limited`).
+      AUTH_RATE_LIMIT_MAX_ATTEMPTS: "500"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
