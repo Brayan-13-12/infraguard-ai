@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AssetDetail } from "@/components/assets/AssetDetail";
 import { Toaster, clearToasts } from "@/components/ui/toast";
 import { LanguageProvider } from "@/i18n";
+import { VIEWER_USER } from "@/test/fixtures";
+import { MockAuthProvider } from "@/test/MockAuthProvider";
 import * as assetService from "@/services/assets";
 import type { Asset } from "@/types/asset";
 
@@ -30,11 +32,17 @@ const ASSET: Asset = {
   updated_at: "2026-09-02T09:00:00Z",
 };
 
-function renderDetail(asset: Asset, onChanged = vi.fn()) {
+function renderDetail(
+  asset: Asset,
+  onChanged = vi.fn(),
+  user?: Parameters<typeof MockAuthProvider>[0]["user"],
+) {
   render(
     <LanguageProvider>
-      <AssetDetail asset={asset} onChanged={onChanged} />
-      <Toaster />
+      <MockAuthProvider user={user}>
+        <AssetDetail asset={asset} onChanged={onChanged} />
+        <Toaster />
+      </MockAuthProvider>
     </LanguageProvider>,
   );
   return { onChanged };
@@ -111,14 +119,24 @@ describe("AssetDetail (full page)", () => {
     expect(spy).toHaveBeenCalledWith("abc-123");
   });
 
+  it("hides every mutating affordance from a read-only (Viewer) user", async () => {
+    renderDetail(ASSET, vi.fn(), VIEWER_USER);
+    expect(screen.getByRole("heading", { name: "billing-api", level: 1 })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /mover a papelera/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /desactivar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /editar criticidad/i })).not.toBeInTheDocument();
+  });
+
   it("moves the asset to Trash behind a confirm step, then toasts and calls onDeleted", async () => {
     const del = vi.spyOn(assetService, "deleteAsset").mockResolvedValue({ ok: true, data: null });
     const onDeleted = vi.fn();
     render(
       <LanguageProvider>
+      <MockAuthProvider>
         <AssetDetail asset={ASSET} onChanged={vi.fn()} onDeleted={onDeleted} />
         <Toaster />
-      </LanguageProvider>,
+      </MockAuthProvider>
+    </LanguageProvider>,
     );
 
     await userEvent.click(screen.getByRole("button", { name: /mover a papelera/i }));
@@ -140,9 +158,11 @@ describe("AssetDetail (full page)", () => {
     const onDeleted = vi.fn();
     render(
       <LanguageProvider>
+      <MockAuthProvider>
         <AssetDetail asset={ASSET} onChanged={vi.fn()} onDeleted={onDeleted} />
         <Toaster />
-      </LanguageProvider>,
+      </MockAuthProvider>
+    </LanguageProvider>,
     );
 
     await userEvent.click(screen.getByRole("button", { name: /mover a papelera/i }));

@@ -8,6 +8,7 @@ import { ThemeProvider } from "@/components/theme/ThemeProvider";
 import { LanguageProvider } from "@/i18n";
 import * as assetService from "@/services/assets";
 import * as authService from "@/services/auth";
+import { makeUser } from "@/test/fixtures";
 import * as healthService from "@/services/health";
 import type { AssetSummary } from "@/types/asset";
 import DashboardPage from "./page";
@@ -26,12 +27,7 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-const USER = {
-  id: "user-1234",
-  email: "user@example.com",
-  is_active: true,
-  created_at: "2026-08-31T00:00:00Z",
-};
+const USER = makeUser({ id: "user-1234" });
 
 const SUMMARY: AssetSummary = {
   total: 12,

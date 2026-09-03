@@ -2,11 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useMemo } from "react";
 
+import { useAuth } from "@/components/AuthProvider";
 import { LockIcon } from "@/components/ui/icons";
 import { useTranslation } from "@/i18n";
 import { cn } from "@/lib/cn";
-import { NAV_ITEMS, type NavItem } from "@/lib/navigation";
+import { NAV_ITEMS, visibleNavItems, type NavItem } from "@/lib/navigation";
 
 /**
  * Flat navigation for the shell (desktop rail + mobile drawer). No section
@@ -29,6 +31,11 @@ export function NavList({
 }) {
   const pathname = usePathname();
   const { t } = useTranslation();
+  const { can } = useAuth();
+
+  // Hide modules the caller's roles do not grant. Visibility only - the backend
+  // still enforces every route.
+  const visible = useMemo(() => visibleNavItems(can, items), [can, items]);
 
   const row = cn(
     "group/nav relative flex items-center rounded-lg text-sm transition-[color,background-color] duration-150",
@@ -37,7 +44,7 @@ export function NavList({
 
   return (
     <ul className={cn("flex flex-col gap-1", collapsed && "items-center")}>
-      {items.map(({ label, href, icon: Icon, status }) => {
+      {visible.map(({ label, href, icon: Icon, status }) => {
         if (status === "soon") {
           return (
             <li key={href}>

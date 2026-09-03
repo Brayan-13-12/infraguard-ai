@@ -13,7 +13,11 @@ from app.models import (
     Incident,
     IncidentAsset,
     IncidentEvent,
+    Permission,
+    Role,
+    RolePermission,
     User,
+    UserRole,
 )
 
 __all__ = [
@@ -24,5 +28,9 @@ __all__ = [
     "Incident",
     "IncidentAsset",
     "IncidentEvent",
+    "Permission",
+    "Role",
+    "RolePermission",
     "User",
+    "UserRole",
 ]

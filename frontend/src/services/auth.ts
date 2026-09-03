@@ -1,5 +1,14 @@
 import { AUTH_ENDPOINTS } from "@/lib/config";
-import { AuthFailure, AuthResult, isUser, LogoutResult, User } from "@/types/auth";
+import {
+  AccountStatus,
+  AuthFailure,
+  AuthResult,
+  isUser,
+  LogoutResult,
+  normalizeUser,
+  RegisterOutcome,
+  User,
+} from "@/types/auth";
 
 const REQUEST_TIMEOUT_MS = 8000;
 
@@ -70,14 +79,51 @@ function detailOf(body: unknown, fallback: string): string {
   return fallback;
 }
 
-export async function register({ email, password }: Credentials): Promise<AuthResult<User>> {
+/** A 403 from `login` / `me` carries `{ detail: { code, message } }`. */
+function accountStateFailure(body: unknown): AuthFailure {
+  const detail =
+    typeof body === "object" && body !== null
+      ? (body as { detail?: unknown }).detail
+      : null;
+  const code =
+    typeof detail === "object" && detail !== null
+      ? (detail as { code?: unknown }).code
+      : undefined;
+  const message =
+    typeof detail === "object" && detail !== null && typeof (detail as { message?: unknown }).message === "string"
+      ? ((detail as { message: string }).message)
+      : "Your account cannot sign in. Contact an administrator.";
+  if (code === "account_pending") return { kind: "account_pending", message };
+  if (code === "account_rejected") return { kind: "account_rejected", message };
+  return { kind: "account_disabled", message };
+}
+
+export async function register({
+  email,
+  password,
+}: Credentials): Promise<AuthResult<RegisterOutcome>> {
   const res = await request(AUTH_ENDPOINTS.register, {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
   if (res === null) return { ok: false, error: UNREACHABLE };
 
-  if (res.status === 201 && isUser(res.body)) return { ok: true, data: res.body };
+  if (res.status === 201) {
+    // An access request was filed - NOT a session. The account is `pending`
+    // until an administrator approves it.
+    const body = (res.body ?? {}) as { account_status?: unknown; detail?: unknown };
+    const status: AccountStatus =
+      typeof body.account_status === "string"
+        ? (body.account_status as AccountStatus)
+        : "pending";
+    return {
+      ok: true,
+      data: {
+        account_status: status,
+        detail: typeof body.detail === "string" ? body.detail : "",
+      },
+    };
+  }
   if (res.status === 409) {
     return { ok: false, error: { kind: "conflict", message: "That email is already registered." } };
   }
@@ -107,12 +153,18 @@ export async function login({ email, password }: Credentials): Promise<AuthResul
   });
   if (res === null) return { ok: false, error: UNREACHABLE };
 
-  if (res.status === 200 && isUser(res.body)) return { ok: true, data: res.body };
+  if (res.status === 200 && isUser(res.body)) {
+    return { ok: true, data: normalizeUser(res.body) };
+  }
   if (res.status === 401) {
     return {
       ok: false,
       error: { kind: "invalid_credentials", message: "Invalid email or password." },
     };
+  }
+  if (res.status === 403) {
+    // Credentials were valid; the account is pending / rejected / disabled.
+    return { ok: false, error: accountStateFailure(res.body) };
   }
   if (res.status === 422) {
     return {
@@ -156,10 +208,10 @@ export async function fetchMe(): Promise<AuthResult<User>> {
   const res = await request(AUTH_ENDPOINTS.me, { method: "GET" });
   if (res === null) return { ok: false, error: UNREACHABLE };
 
-  if (res.status === 200 && isUser(res.body)) return { ok: true, data: res.body };
-  if (res.status === 401) return { ok: false, error: { kind: "unauthenticated" } };
-  if (res.status === 403) {
-    return { ok: false, error: { kind: "invalid_credentials", message: "Your account is inactive." } };
+  if (res.status === 200 && isUser(res.body)) {
+    return { ok: true, data: normalizeUser(res.body) };
   }
+  if (res.status === 401) return { ok: false, error: { kind: "unauthenticated" } };
+  if (res.status === 403) return { ok: false, error: accountStateFailure(res.body) };
   return { ok: false, error: { kind: "unexpected", message: "Could not load your profile." } };
 }

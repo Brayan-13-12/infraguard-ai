@@ -10,15 +10,18 @@
 * ``POST  /api/v1/incidents/{id}/comments``   - append a COMMENT timeline entry
 * ``DELETE /api/v1/incidents/{id}``           - move to Trash (soft delete, recoverable)
 
-Every endpoint requires an authenticated, active user (``get_current_user`` at
-the router level). State-changing methods additionally pass the CSRF origin
-check. ``created_by`` / actor identity is always taken from the authenticated
-user - never from the request body.
+Authorization (RBAC): every endpoint requires an authenticated, active user
+**and** the matching permission - ``incidents.read`` for list / detail /
+summary / timeline, ``incidents.create`` for ``POST``, ``incidents.update`` for
+``PATCH``, affected-asset edits and comments, ``incidents.resolve`` for the
+resolve / reopen lifecycle, ``incidents.delete`` to move an incident to Trash.
+An authenticated caller lacking the permission gets ``403`` (never ``401``).
+State-changing methods additionally pass the CSRF origin check. ``created_by`` /
+actor identity is always taken from the authenticated user, never the body.
 
 ``DELETE`` is a **soft delete**: the timeline, affected-asset links and every
-timestamp are left intact so a restore is lossless. There is no permanent purge
-(deferred to RBAC). Normal reads reject a trashed incident with ``410 Gone``.
-Future RBAC permission boundary: ``incidents.delete``.
+timestamp are left intact so a restore is lossless. There is no permanent purge.
+Normal reads reject a trashed incident with ``410 Gone``.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from fastapi.exceptions import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_trusted_origin
+from app.api.deps import get_current_user, require_permission, require_trusted_origin
 from app.api.request_context import get_audit_context
 from app.db.session import get_db
 from app.models.asset import Asset
@@ -81,6 +84,12 @@ router = APIRouter(
     tags=["incidents"],
     dependencies=[Depends(get_current_user)],
 )
+
+_CAN_READ = Depends(require_permission("incidents.read"))
+_CAN_CREATE = Depends(require_permission("incidents.create"))
+_CAN_UPDATE = Depends(require_permission("incidents.update"))
+_CAN_RESOLVE = Depends(require_permission("incidents.resolve"))
+_CAN_DELETE = Depends(require_permission("incidents.delete"))
 
 _NOT_FOUND = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found"
@@ -285,7 +294,9 @@ def _detail_or_404(db: Session, incident_id: uuid.UUID) -> IncidentRead:
     return _incident_read(detail)
 
 
-@router.get("", response_model=IncidentPage, summary="List incidents")
+@router.get(
+    "", response_model=IncidentPage, summary="List incidents", dependencies=[_CAN_READ]
+)
 def list_incidents_endpoint(
     db: Session = Depends(get_db),
     page: int = Query(1, ge=1),
@@ -330,6 +341,7 @@ def list_incidents_endpoint(
     "/summary",
     response_model=IncidentSummary,
     summary="Aggregate incident counts for the dashboard",
+    dependencies=[_CAN_READ],
 )
 def incident_summary_endpoint(db: Session = Depends(get_db)) -> IncidentSummary:
     # Declared before ``/{incident_id}`` so "summary" is not captured as a UUID.
@@ -341,6 +353,7 @@ def incident_summary_endpoint(db: Session = Depends(get_db)) -> IncidentSummary:
     response_model=IncidentRead,
     summary="Get an incident (detail, affected assets, timeline)",
     responses={404: {"model": MessageResponse}},
+    dependencies=[_CAN_READ],
 )
 def get_incident_endpoint(
     incident_id: uuid.UUID, db: Session = Depends(get_db)
@@ -354,7 +367,7 @@ def get_incident_endpoint(
     status_code=status.HTTP_201_CREATED,
     summary="Create an incident",
     responses={422: {"description": "Validation error"}},
-    dependencies=[Depends(require_trusted_origin)],
+    dependencies=[Depends(require_trusted_origin), _CAN_CREATE],
 )
 def create_incident_endpoint(
     payload: IncidentCreate,
@@ -387,7 +400,7 @@ def create_incident_endpoint(
     response_model=IncidentRead,
     summary="Update an incident (partial)",
     responses={404: {"model": MessageResponse}, 422: {"description": "Validation error"}},
-    dependencies=[Depends(require_trusted_origin)],
+    dependencies=[Depends(require_trusted_origin), _CAN_UPDATE],
 )
 def update_incident_endpoint(
     incident_id: uuid.UUID,
@@ -412,7 +425,7 @@ def update_incident_endpoint(
     response_model=IncidentRead,
     summary="Resolve an incident (idempotent)",
     responses={404: {"model": MessageResponse}},
-    dependencies=[Depends(require_trusted_origin)],
+    dependencies=[Depends(require_trusted_origin), _CAN_RESOLVE],
 )
 def resolve_incident_endpoint(
     incident_id: uuid.UUID,
@@ -435,7 +448,7 @@ def resolve_incident_endpoint(
     response_model=IncidentRead,
     summary="Reopen a resolved/closed incident",
     responses={404: {"model": MessageResponse}},
-    dependencies=[Depends(require_trusted_origin)],
+    dependencies=[Depends(require_trusted_origin), _CAN_RESOLVE],
 )
 def reopen_incident_endpoint(
     incident_id: uuid.UUID,
@@ -459,7 +472,7 @@ def reopen_incident_endpoint(
     status_code=status.HTTP_201_CREATED,
     summary="Add a comment to the incident timeline",
     responses={404: {"model": MessageResponse}, 422: {"description": "Validation error"}},
-    dependencies=[Depends(require_trusted_origin)],
+    dependencies=[Depends(require_trusted_origin), _CAN_UPDATE],
 )
 def add_comment_endpoint(
     incident_id: uuid.UUID,
@@ -489,7 +502,7 @@ def add_comment_endpoint(
         404: {"model": MessageResponse},
         409: {"model": MessageResponse, "description": "Already in Trash"},
     },
-    dependencies=[Depends(require_trusted_origin)],
+    dependencies=[Depends(require_trusted_origin), _CAN_DELETE],
 )
 def delete_incident_endpoint(
     incident_id: uuid.UUID,

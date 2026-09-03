@@ -7,6 +7,7 @@ import { MobileNav } from "@/components/shell/MobileNav";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
 import { LanguageProvider } from "@/i18n";
 import * as authService from "@/services/auth";
+import { makeUser } from "@/test/fixtures";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard",
@@ -20,12 +21,7 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-const USER = {
-  id: "u1",
-  email: "user@example.com",
-  is_active: true,
-  created_at: "2026-08-31T00:00:00Z",
-};
+const USER = makeUser({ id: "u1" });
 
 afterEach(() => vi.restoreAllMocks());
 

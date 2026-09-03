@@ -12,10 +12,11 @@ normal list.
 * ``GET  /api/v1/trash/incidents/{id}``              - one trashed incident (+ preserved timeline)
 * ``POST /api/v1/trash/incidents/{id}/restore``      - restore -> reappears in Incidents
 
-Every endpoint requires an authenticated, active user. There is **no permanent
-purge** in this phase - deleting for good is a destructive action that must wait
-for authorization (RBAC). Future permission boundaries: ``trash.read`` /
-``trash.restore`` / ``trash.purge``.
+Authorization (RBAC): reading Trash (summary / lists / detail) requires
+``trash.read``; restoring requires ``trash.restore``. Moving something *to*
+Trash stays a domain capability (``assets.delete`` / ``incidents.delete``) on the
+Asset / Incident APIs - ``trash.restore`` never deletes. There is **no permanent
+purge**; ``trash.purge`` is reserved for a future RBAC-gated "empty Trash".
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from fastapi import APIRouter, Depends, Query, status
 from fastapi.exceptions import HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_trusted_origin
+from app.api.deps import get_current_user, require_permission, require_trusted_origin
 from app.api.request_context import get_audit_context
 from app.db.session import get_db
 from app.models.asset import AssetType, Criticality
@@ -64,8 +65,10 @@ from app.services.trash import (
 router = APIRouter(
     prefix="/trash",
     tags=["trash"],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(get_current_user), Depends(require_permission("trash.read"))],
 )
+
+_CAN_RESTORE = Depends(require_permission("trash.restore"))
 
 _ASSET_NOT_FOUND = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND, detail="No trashed asset with that id"
@@ -177,7 +180,7 @@ def get_trash_asset_endpoint(
     response_model=MessageResponse,
     summary="Restore a trashed asset",
     responses={404: {"model": MessageResponse}},
-    dependencies=[Depends(require_trusted_origin)],
+    dependencies=[Depends(require_trusted_origin), _CAN_RESTORE],
 )
 def restore_asset_endpoint(
     asset_id: uuid.UUID,
@@ -308,7 +311,7 @@ def get_trash_incident_endpoint(
     response_model=MessageResponse,
     summary="Restore a trashed incident",
     responses={404: {"model": MessageResponse}},
-    dependencies=[Depends(require_trusted_origin)],
+    dependencies=[Depends(require_trusted_origin), _CAN_RESTORE],
 )
 def restore_incident_endpoint(
     incident_id: uuid.UUID,

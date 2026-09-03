@@ -1,9 +1,13 @@
-"""Authentication endpoints (v0.2).
+"""Authentication endpoints (v0.2 + Governance Phase 3 access-request flow).
 
-* ``POST /api/v1/auth/register`` - create an account
-* ``POST /api/v1/auth/login``    - issue an access-token cookie
+* ``POST /api/v1/auth/register`` - submit an **access request** (creates a
+  ``pending`` account with no roles - it cannot sign in until an administrator
+  approves it)
+* ``POST /api/v1/auth/login``    - issue an access-token cookie for an ``active``
+  account; a status-specific ``403`` for ``pending`` / ``rejected`` / ``disabled``
 * ``POST /api/v1/auth/logout``   - clear the access-token cookie
-* ``GET  /api/v1/auth/me``       - the authenticated user's public profile
+* ``GET  /api/v1/auth/me``       - the authenticated user's identity + effective
+  authorization
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import (
     _extract_token,
     auth_rate_limiter,
+    get_current_permissions,
     get_current_user,
     require_trusted_origin,
 )
@@ -23,14 +28,18 @@ from app.core.config import settings
 from app.core.security import TokenError, create_access_token, decode_access_token
 from app.db.session import get_db
 from app.models.audit import AuditAction, AuditEntityType
-from app.models.user import User
+from app.models.user import AccountStatus, User
 from app.schemas.auth import (
+    AccessRequestResponse,
+    CurrentUser,
     LoginRequest,
     MessageResponse,
     RegisterRequest,
+    RoleRef,
     UserPublic,
 )
 from app.services.audit import AuditContext, record_event
+from app.services.rbac import get_roles_for_user
 from app.services.users import EmailAlreadyRegistered, authenticate, create_user, get_by_id
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -40,6 +49,30 @@ _INVALID_CREDENTIALS = HTTPException(
     detail="Invalid email or password",
     headers={"WWW-Authenticate": "Bearer"},
 )
+
+# Status-neutral: the same 409 whether the email belongs to a pending, active,
+# rejected or disabled account - never reveal which.
+_EMAIL_TAKEN = HTTPException(
+    status_code=status.HTTP_409_CONFLICT,
+    detail="An account or access request already exists for this email.",
+)
+
+#: Login states for a correctly-authenticated but non-active account. The
+#: frontend keys off ``detail.code``; the message stays generic and safe.
+_LOGIN_STATE_RESPONSE: dict[AccountStatus, tuple[str, str]] = {
+    AccountStatus.PENDING: (
+        "account_pending",
+        "Your access request is pending administrator approval.",
+    ),
+    AccountStatus.REJECTED: (
+        "account_rejected",
+        "Your access request was not approved. Contact an administrator.",
+    ),
+    AccountStatus.DISABLED: (
+        "account_disabled",
+        "Your account has been disabled. Contact an administrator.",
+    ),
+}
 
 
 def _set_auth_cookie(response: Response, token: str) -> None:
@@ -76,12 +109,12 @@ def _clear_auth_cookie(response: Response) -> None:
 
 @router.post(
     "/register",
-    response_model=UserPublic,
+    response_model=AccessRequestResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Register a new account",
+    summary="Submit an access request",
     responses={
-        201: {"model": UserPublic},
-        409: {"model": MessageResponse, "description": "Email already registered"},
+        201: {"model": AccessRequestResponse},
+        409: {"model": MessageResponse, "description": "Email already in use"},
         422: {"description": "Invalid email or password policy violation"},
         429: {"model": MessageResponse, "description": "Too many attempts"},
     },
@@ -90,22 +123,32 @@ def _clear_auth_cookie(response: Response) -> None:
         Depends(auth_rate_limiter("register")),
     ],
 )
-def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> UserPublic:
+def register(
+    payload: RegisterRequest,
+    db: Session = Depends(get_db),
+    ctx: RequestContext = Depends(get_request_context),
+) -> AccessRequestResponse:
+    """Create a **pending** account (no roles). Public registration can never
+    grant access - an administrator must approve the request first."""
     try:
         user = create_user(db, email=payload.email, password=payload.password)
     except EmailAlreadyRegistered:
-        # ACCEPTED v0.2 TRADEOFF: an explicit "already registered" response lets an
-        # attacker enumerate which emails have accounts. We keep it for portfolio
-        # usability and do NOT redesign registration. Rate limiting (above) blunts
-        # bulk enumeration. A production deployment would instead return a generic
-        # "check your email" response and confirm/deny out of band. Documented in
-        # backend/README.md and docs/architecture.md.
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Email is already registered",
-        ) from None
+        raise _EMAIL_TAKEN from None
+
+    record_event(
+        db,
+        ctx=_auth_ctx(user, ctx),
+        action=AuditAction.CREATE,
+        entity_type=AuditEntityType.USER,
+        entity_id=user.id,
+        entity_label=user.email,
+        metadata={"account_status": user.account_status, "via": "registration"},
+    )
     db.commit()
-    return UserPublic.model_validate(user)
+    return AccessRequestResponse(
+        detail="Access request submitted. An administrator must approve it before you can sign in.",
+        account_status=user.account_status,
+    )
 
 
 @router.post(
@@ -115,6 +158,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> UserPub
     responses={
         200: {"model": UserPublic},
         401: {"model": MessageResponse, "description": "Invalid credentials"},
+        403: {"description": "Account pending / rejected / disabled"},
         429: {"model": MessageResponse, "description": "Too many attempts"},
     },
     dependencies=[
@@ -130,10 +174,17 @@ def login(
 ) -> UserPublic:
     user = authenticate(db, email=payload.email, password=payload.password)
     if user is None:
-        # A failed login is NOT audited in this phase (it would bloat the
-        # governance log). Failed-auth telemetry is documented as future
-        # security work - see docs/architecture.md.
         raise _INVALID_CREDENTIALS
+
+    status_ = AccountStatus(user.account_status)
+    if status_ is not AccountStatus.ACTIVE:
+        # Credentials were valid - reveal the lifecycle state (but not why), so the
+        # UI can show "pending approval" instead of a misleading "wrong password".
+        code, message = _LOGIN_STATE_RESPONSE[status_]
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": code, "message": message},
+        )
 
     token, _ = create_access_token(subject=str(user.id))
     _set_auth_cookie(response, token)
@@ -189,13 +240,26 @@ def logout(
 
 @router.get(
     "/me",
-    response_model=UserPublic,
-    summary="Current authenticated user",
+    response_model=CurrentUser,
+    summary="Current authenticated user (identity + effective authorization)",
     responses={
-        200: {"model": UserPublic},
+        200: {"model": CurrentUser},
         401: {"model": MessageResponse, "description": "Not authenticated"},
-        403: {"model": MessageResponse, "description": "Inactive account"},
+        403: {"description": "Account no longer active"},
     },
 )
-def me(current_user: User = Depends(get_current_user)) -> UserPublic:
-    return UserPublic.model_validate(current_user)
+def me(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    permissions: frozenset[str] = Depends(get_current_permissions),
+) -> CurrentUser:
+    roles = get_roles_for_user(db, current_user.id)
+    return CurrentUser(
+        id=current_user.id,
+        email=current_user.email,
+        is_active=current_user.is_active,
+        account_status=current_user.account_status,
+        created_at=current_user.created_at,
+        roles=[RoleRef.model_validate(r) for r in roles],
+        permissions=sorted(permissions),
+    )

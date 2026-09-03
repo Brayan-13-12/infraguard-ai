@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { useAuth } from "@/components/AuthProvider";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/overlay";
 import { RestoreIcon } from "@/components/ui/icons";
@@ -34,6 +35,7 @@ export function RestoreAction({
   size?: "sm" | "md";
 }) {
   const { t } = useTranslation();
+  const { can } = useAuth();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +62,8 @@ export function RestoreAction({
       setError(t("trashDetail.restoreError"));
     }
   }
+
+  if (!can("trash.restore")) return null;
 
   return (
     <>

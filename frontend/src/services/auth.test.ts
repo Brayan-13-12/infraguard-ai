@@ -14,6 +14,8 @@ const USER = {
   email: "user@example.com",
   is_active: true,
   created_at: "2026-08-31T00:00:00Z",
+  roles: [{ id: "r1", name: "Viewer", slug: "viewer" }],
+  permissions: ["assets.read", "incidents.read"],
 };
 
 afterEach(() => {
@@ -21,14 +23,22 @@ afterEach(() => {
 });
 
 describe("register", () => {
-  it("returns the created user on 201", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(USER, 201)));
+  it("returns the access-request outcome on 201 (a pending request, not a session)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json({ detail: "An administrator must approve it.", account_status: "pending" }, 201),
+      ),
+    );
     const result = await register({ email: USER.email, password: "a-good-passphrase" });
-    expect(result).toEqual({ ok: true, data: USER });
+    expect(result).toEqual({
+      ok: true,
+      data: { account_status: "pending", detail: "An administrator must approve it." },
+    });
   });
 
   it("sends credentials so the cookie is stored", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(json(USER, 201));
+    const fetchMock = vi.fn().mockResolvedValue(json({ account_status: "pending" }, 201));
     vi.stubGlobal("fetch", fetchMock);
     await register({ email: USER.email, password: "a-good-passphrase" });
     expect(fetchMock).toHaveBeenCalledWith(
@@ -91,6 +101,31 @@ describe("login", () => {
       ok: false,
     });
   });
+
+  it("maps a 403 with account_pending to that failure kind (credentials were valid)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json({ detail: { code: "account_pending", message: "pending approval" } }, 403),
+      ),
+    );
+    const result = await login({ email: USER.email, password: "pw" });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { kind: "account_pending", message: "pending approval" },
+    });
+  });
+
+  it("maps a 403 with account_rejected", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(json({ detail: { code: "account_rejected", message: "no" } }, 403)),
+    );
+    expect(await login({ email: USER.email, password: "pw" })).toMatchObject({
+      ok: false,
+      error: { kind: "account_rejected" },
+    });
+  });
 });
 
 describe("fetchMe", () => {
@@ -105,6 +140,16 @@ describe("fetchMe", () => {
   it("maps a malformed body to 'unexpected'", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ nope: true }, 200)));
     expect(await fetchMe()).toMatchObject({ ok: false, error: { kind: "unexpected" } });
+  });
+  it("maps a 403 to the account-state failure (disabled mid-session)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(json({ detail: { code: "account_disabled", message: "off" } }, 403)),
+    );
+    expect(await fetchMe()).toMatchObject({
+      ok: false,
+      error: { kind: "account_disabled" },
+    });
   });
 });
 

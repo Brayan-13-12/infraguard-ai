@@ -25,6 +25,7 @@ import { SystemStatusIndicator } from "./SystemStatusIndicator";
 type State =
   | { kind: "loading" }
   | { kind: "loaded"; summary: AssetSummary }
+  | { kind: "no_access" }
   | { kind: "error" };
 
 function OverviewSkeleton() {
@@ -51,9 +52,13 @@ function OverviewSkeleton() {
  * recent list and the health check.
  */
 export function DashboardOverview() {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const { t, language } = useTranslation();
   const name = user?.email?.split("@")[0];
+  // Never call an endpoint the caller's roles do not grant (§43) - a
+  // permission-driven 403 must not flood the board.
+  const canReadAssets = can("assets.read");
+  const canReadIncidents = can("incidents.read");
 
   const [state, setState] = useState<State>({ kind: "loading" });
   const [refreshing, setRefreshing] = useState(false);
@@ -64,6 +69,10 @@ export function DashboardOverview() {
   const fetchSummary = useCallback(
     (mode: "initial" | "refresh") => {
       let cancelled = false;
+      if (!canReadAssets) {
+        setState({ kind: "no_access" });
+        return () => {};
+      }
       if (mode === "refresh") setRefreshing(true);
       else setState({ kind: "loading" });
 
@@ -86,7 +95,7 @@ export function DashboardOverview() {
         cancelled = true;
       };
     },
-    [t],
+    [t, canReadAssets],
   );
 
   useEffect(() => fetchSummary("initial"), [fetchSummary]);
@@ -144,20 +153,26 @@ export function DashboardOverview() {
         </Alert>
       ) : (
         <div className="flex flex-col gap-6">
-          <Reveal>
-            <KpiRow summary={state.summary} />
-          </Reveal>
-          <Reveal
-            delayMs={60}
-            className="grid gap-4 lg:grid-cols-[1.4fr_1fr] lg:items-start"
-          >
-            <CriticalityChart summary={state.summary} />
-            <OperationalSummary summary={state.summary} />
-          </Reveal>
-          <Reveal delayMs={120} className="grid gap-4 lg:grid-cols-2 lg:items-start">
-            <RecentAssets refreshToken={refreshToken} />
-            <RecentIncidents refreshToken={refreshToken} />
-          </Reveal>
+          {state.kind === "loaded" ? (
+            <>
+              <Reveal>
+                <KpiRow summary={state.summary} />
+              </Reveal>
+              <Reveal
+                delayMs={60}
+                className="grid gap-4 lg:grid-cols-[1.4fr_1fr] lg:items-start"
+              >
+                <CriticalityChart summary={state.summary} />
+                <OperationalSummary summary={state.summary} />
+              </Reveal>
+            </>
+          ) : null}
+          {canReadAssets || canReadIncidents ? (
+            <Reveal delayMs={120} className="grid gap-4 lg:grid-cols-2 lg:items-start">
+              {canReadAssets ? <RecentAssets refreshToken={refreshToken} /> : null}
+              {canReadIncidents ? <RecentIncidents refreshToken={refreshToken} /> : null}
+            </Reveal>
+          ) : null}
         </div>
       )}
     </div>

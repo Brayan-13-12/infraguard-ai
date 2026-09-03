@@ -6,14 +6,21 @@ test-only database, and a *configured* run must never be silently skipped.
 
 Safety rule
 -----------
-``TEST_DATABASE_URL`` is honoured only if **the database name is exactly
-``test`` or ends with ``_test``** (case-insensitive). Anything else - a bare
-``infraguard``, ``postgres``, a production URL, an empty name - is rejected and
-the integration suite fails fast. Prefer a disposable container, e.g.::
+The integration suite runs only when **both** hold (a naming convention alone is
+not trusted):
 
-    docker run -d --rm -e POSTGRES_DB=infraguard_test -e POSTGRES_USER=t \\
-      -e POSTGRES_PASSWORD=t -p 127.0.0.1:55432:5432 postgres:17.2-alpine
-    export TEST_DATABASE_URL=postgresql+psycopg://t:t@localhost:55432/infraguard_test
+1. ``INFRAGUARD_DISPOSABLE_DB`` is set truthy (``1`` / ``true`` / ``yes`` /
+   ``on``) - the operator has explicitly declared the target throwaway; and
+2. the ``TEST_DATABASE_URL`` database name is exactly ``test`` or ends with
+   ``_test`` (case-insensitive), and is not the app's own ``DATABASE_URL``.
+
+Anything else - a bare ``infraguard``, ``postgres``, a production URL, an empty
+name, or the opt-in missing - is rejected and the integration suite fails fast.
+Use the disposable ``db-test`` Compose service::
+
+    docker compose --profile test up -d db-test
+    export INFRAGUARD_DISPOSABLE_DB=1
+    export TEST_DATABASE_URL=postgresql+psycopg://infraguard:infraguard_test_only@localhost:55433/infraguard_test
 
 Skip vs. fail
 -------------
@@ -26,6 +33,8 @@ from __future__ import annotations
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
+
+from app.core.db_safety import disposable_opt_in
 
 
 class UnsafeTestDatabase(RuntimeError):
@@ -51,6 +60,13 @@ def assert_test_database(url: str, *, app_database_url: str | None = None) -> st
         parsed = make_url(url)
     except Exception as exc:  # noqa: BLE001 - surface as a guard failure
         raise UnsafeTestDatabase(f"TEST_DATABASE_URL is not a valid URL: {exc}") from exc
+
+    if not disposable_opt_in():
+        raise UnsafeTestDatabase(
+            "refusing to run destructive integration tests: set "
+            "INFRAGUARD_DISPOSABLE_DB=1 to confirm TEST_DATABASE_URL points at a "
+            "throwaway database (never the main development database)."
+        )
 
     name = parsed.database or ""
     if not _is_test_database_name(name):

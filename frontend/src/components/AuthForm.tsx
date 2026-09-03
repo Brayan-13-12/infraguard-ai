@@ -14,12 +14,12 @@ import {
   validateRegistration,
   type ValidationCode,
 } from "@/lib/validation";
-import type { AuthFailure, AuthResult, User } from "@/types/auth";
+import type { AuthFailure, AuthResult } from "@/types/auth";
 
-interface AuthFormProps {
+interface AuthFormProps<T> {
   mode: "login" | "register";
-  onSubmit: (email: string, password: string) => Promise<AuthResult<User>>;
-  onSuccess: (user: User) => void;
+  onSubmit: (email: string, password: string) => Promise<AuthResult<T>>;
+  onSuccess: (data: T) => void;
 }
 
 const FIELD_ERROR_KEYS: Record<ValidationCode, TranslationKey> = {
@@ -37,6 +37,9 @@ const FORM_ERROR_KEYS: Record<AuthFailure["kind"], TranslationKey> = {
   unreachable: "auth.formErrors.unreachable",
   validation: "auth.formErrors.validation",
   unauthenticated: "auth.formErrors.unexpected",
+  account_pending: "auth.formErrors.accountPending",
+  account_rejected: "auth.formErrors.accountRejected",
+  account_disabled: "auth.formErrors.accountDisabled",
   unexpected: "auth.formErrors.unexpected",
 };
 
@@ -48,7 +51,7 @@ function prefersReducedMotion(): boolean {
   );
 }
 
-export function AuthForm({ mode, onSubmit, onSuccess }: AuthFormProps) {
+export function AuthForm<T>({ mode, onSubmit, onSuccess }: AuthFormProps<T>) {
   const { t } = useTranslation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

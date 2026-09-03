@@ -14,7 +14,12 @@ import {
 
 const REQUEST_TIMEOUT_MS = 8000;
 
-export type TrashErrorKind = "unreachable" | "unauthorized" | "not_found" | "unexpected";
+export type TrashErrorKind =
+  | "unreachable"
+  | "unauthorized"
+  | "forbidden"
+  | "not_found"
+  | "unexpected";
 
 export type TrashResult<T> =
   | { ok: true; data: T }
@@ -71,7 +76,8 @@ async function request(
 }
 
 function errorFor(status: number): { kind: TrashErrorKind } {
-  if (status === 401 || status === 403) return { kind: "unauthorized" };
+  if (status === 401) return { kind: "unauthorized" };
+  if (status === 403) return { kind: "forbidden" };
   if (status === 404) return { kind: "not_found" };
   return { kind: "unexpected" };
 }

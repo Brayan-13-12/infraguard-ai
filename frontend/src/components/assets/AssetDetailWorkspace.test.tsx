@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssetDetailWorkspace } from "@/components/assets/AssetDetailWorkspace";
 import { Toaster, clearToasts } from "@/components/ui/toast";
 import { LanguageProvider } from "@/i18n";
+import { MockAuthProvider } from "@/test/MockAuthProvider";
 import { subscribeAssetsChanged } from "@/lib/assetsRefresh";
 import * as assetService from "@/services/assets";
 import type { Asset } from "@/types/asset";
@@ -39,8 +40,10 @@ const ASSET: Asset = {
 function renderWorkspace() {
   return render(
     <LanguageProvider>
+      <MockAuthProvider>
       <AssetDetailWorkspace id="abc-123" />
       <Toaster />
+    </MockAuthProvider>
     </LanguageProvider>,
   );
 }

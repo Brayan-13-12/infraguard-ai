@@ -73,15 +73,16 @@ infraguard-ai/
 │                       components/{ui,theme,shell,auth,dashboard,assets} ·
 │                       services/{auth,health,assets} · i18n · lib · types
 ├── backend/            FastAPI app
-│   ├── app/            api/{deps,errors,v1/routes} · core/{config,security,ratelimit}
-│   │                   · db · models/{user,asset} · schemas · services
-│   ├── alembic/versions/   *_create_users_table.py · *_create_assets_table.py
+│   ├── app/            api/{deps,errors,v1/routes} · core/{config,security,ratelimit,db_safety}
+│   │                   · db · models · schemas · services · seeds · scripts
+│   ├── alembic/versions/   *_create_users_table.py · … · *_user_account_status.py
 │   ├── tests/{unit,integration}/
 │   └── requirements*.txt   hash-pinned dependency locks
 ├── infra/              Placeholder for future IaC (Kubernetes, Helm)
 ├── docs/               architecture.md
-├── .github/workflows/  CI: lint + unit/integration tests + Docker migrate + auth smoke test
-├── docker-compose.yml  Full local stack (segmented networks, hardened) + one-shot `migrate`
+├── .github/workflows/  CI: lint + unit/integration tests + Docker migrate/bootstrap/seed smoke
+├── docker-compose.yml  Full local stack (segmented networks, hardened) + one-shot
+│                       migrate / bootstrap / seed-demo + throwaway db-test (profile)
 ├── .env.example        Environment template (placeholders only)
 ├── .gitignore  ·  LICENSE (MIT)  ·  README.md
 ```
@@ -137,12 +138,22 @@ From the repository root:
 
 ```bash
 cp .env.example .env
+# set BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD in .env (a real >=12-char
+# password) - the .env.example placeholder is deliberately too short.
 docker compose up --build
 ```
 
 ```bash
-docker compose run --rm migrate   # apply DB migrations (creates the users table)
+docker compose run --rm migrate     # apply DB migrations
+docker compose run --rm bootstrap   # create the first Administrator (idempotent)
+docker compose run --rm seed-demo   # load the curated demo dataset (idempotent, additive)
 ```
+
+Public registration only files a **pending access request**; the sole
+deterministic way to get a usable Administrator is the `bootstrap` command
+above. Then sign in at `/login` with `BOOTSTRAP_ADMIN_EMAIL` /
+`BOOTSTRAP_ADMIN_PASSWORD` and approve other requests under **Administration →
+Access requests**.
 
 | Service | URL |
 | --- | --- |
@@ -152,14 +163,41 @@ docker compose run --rm migrate   # apply DB migrations (creates the users table
 | Backend liveness | http://localhost:8000/api/v1/health/live |
 | Backend readiness | http://localhost:8000/api/v1/health/ready |
 
-The `migrate` service is **one-shot** and never runs on `docker compose up`.
-PostgreSQL publishes **no** host port and lives on an `internal` network with no
-outbound route. Frontend/backend host ports bind to `127.0.0.1` only.
+The `migrate` / `bootstrap` / `seed-demo` services are **one-shot** and never run
+on `docker compose up`. PostgreSQL publishes **no** host port and lives on an
+`internal` network with no outbound route. Frontend/backend host ports bind to
+`127.0.0.1` only.
 
-```bash
-docker compose down        # keep data
-docker compose down -v     # also delete the pgdata volume
-```
+## Database safety
+
+`infraguard-ai_pgdata` is **persistent development data** - treat it as
+user-owned.
+
+| Command | Verdict |
+| --- | --- |
+| `docker compose down` / `docker compose stop` | ✅ safe - stops/removes containers, keeps data |
+| `docker compose down -v` | ⛔ **never** for the dev environment - it destroys `pgdata` |
+| `docker volume rm infraguard-ai_pgdata` · `docker volume prune` · `docker system prune --volumes` | ⛔ never |
+| drop / truncate / reset / recreate the dev database "for testing" | ⛔ never |
+
+- **Regenerate demo data** with `docker compose run --rm seed-demo` - it is
+  strictly additive and idempotent, and **never** resets PostgreSQL. It leaves
+  user-created records, users, passwords, roles and audit history untouched.
+- **Destructive testing** (integration suite, `upgrade`/`downgrade` migration
+  cycles) runs against the **throwaway `db-test` service** - a separate
+  `pgdata_test` volume on `127.0.0.1:55433`, never the main `db`:
+
+  ```bash
+  docker compose --profile test up -d db-test
+  export INFRAGUARD_DISPOSABLE_DB=1     # explicit opt-in - the guard fails closed without it
+  export TEST_DATABASE_URL=postgresql+psycopg://infraguard:infraguard_test_only@localhost:55433/infraguard_test
+  cd backend && pytest -m ""
+  docker compose --profile test down -v # safe: only the throwaway volume
+  ```
+
+  Any destructive DB helper refuses to run unless **both** `INFRAGUARD_DISPOSABLE_DB`
+  is set truthy **and** the target database name is disposable (`test` / `*_test`)
+  - a naming convention alone is not trusted (`app/core/db_safety.py`).
 
 ## Local development (without Docker)
 
@@ -196,11 +234,11 @@ pnpm dev
 | `GET` | `/api/v1/health/live` | Liveness. Always `200` while the process runs. No DB. |
 | `GET` | `/api/v1/health/ready` | Readiness. `200` ready / `503` not ready (live DB check). |
 | `GET` | `/api/v1/health` | Summarized status (`healthy` / `degraded`). Compatibility alias. |
-| `POST` | `/api/v1/auth/register` | `{email, password}` → `201` user · `409` duplicate · `422` policy · `429` |
-| `POST` | `/api/v1/auth/login` | `{email, password}` → `200` user + sets HttpOnly cookie · `401` · `429` |
+| `POST` | `/api/v1/auth/register` | Submit an **access request**: `{email, password}` → `201 {detail, account_status:"pending"}` · `409` duplicate (status-neutral) · `422` policy · `429`. No session, no roles. |
+| `POST` | `/api/v1/auth/login` | `{email, password}` → `200` user + sets HttpOnly cookie · `401` (bad credentials) · `403 {detail:{code}}` where `code` ∈ `account_pending` / `account_rejected` / `account_disabled` (credentials were valid) · `429` |
 | `POST` | `/api/v1/auth/logout` | Clears the auth cookie → `200` |
-| `GET` | `/api/v1/auth/me` | Authenticated user's public profile → `200` · `401` · `403` |
-| `GET` | `/api/v1/assets` | List assets - `page` `page_size` `q` `asset_type` `environment` `criticality`\* `status`\* `is_active` → `200` (auth) |
+| `GET` | `/api/v1/auth/me` | Current user: identity + `account_status` + `roles` + effective `permissions` → `200` · `401` · `403` (pending / rejected / disabled) |
+| `GET` | `/api/v1/assets` | List assets - `page` `page_size` `q` `asset_type` `environment` `criticality`\* `status`\* `is_active` → `200` (needs `assets.read`) |
 | `GET` | `/api/v1/assets/summary` | Aggregate counts (`total` `active` `inactive` + `by_criticality` / `by_status` / `by_environment` / `by_type`, every catalog key present) → `200` (auth) |
 | `POST` | `/api/v1/assets` | Create an asset → `201` · `422` (auth) |
 | `GET` | `/api/v1/assets/{id}` | Asset detail → `200` · `404` (auth) |
@@ -224,17 +262,82 @@ pnpm dev
 | `POST` | `/api/v1/trash/assets/{id}/restore` | Restore to the live module (same id) → `200` · `404` (auth + CSRF) |
 | `GET` | `/api/v1/trash/incidents` | List trashed incidents - `page` (15, max 100) `q` `severity`\* `status`\* `deleted_by` `from` `to` → `200` (auth) |
 | `GET` | `/api/v1/trash/incidents/{id}` | Trashed incident detail (read-only, + timeline + affected assets) → `200` · `404` (auth) |
-| `POST` | `/api/v1/trash/incidents/{id}/restore` | Restore to the live module (same id, history intact) → `200` · `404` (auth + CSRF) |
+| `POST` | `/api/v1/trash/incidents/{id}/restore` | Restore to the live module (same id, history intact) → `200` · `404` (needs `trash.restore` + CSRF) |
+| `GET` | `/api/v1/admin/permissions` | Grouped permission catalog → `200` (needs `roles.read`) |
+| `GET` | `/api/v1/admin/users` | List users - `page` (20, max 100) `q` `status` (`pending`/`active`/`rejected`/`disabled`) `role` (slug); each row carries `account_status` + its roles → `200` (needs `users.read`) |
+| `GET` | `/api/v1/admin/access-requests` | Pending access requests, newest first - `page` `q` → `200` (needs `users.read`) |
+| `GET` | `/api/v1/admin/users/{id}` | Identity + `account_status` + roles + effective permissions + `is_last_active_admin` → `200` · `404` (needs `users.read`) |
+| `PATCH` | `/api/v1/admin/users/{id}` | Enable / disable an **active** account (`{is_active}`) → `200` · `404` · `409` (last admin, or account is pending / rejected) (needs `users.manage` + CSRF) |
+| `POST` | `/api/v1/admin/users/{id}/approve` | Approve a request: `{role_ids}` (**≥ 1 required**) → activates + assigns roles → `200` · `404` · `409` (not pending/rejected) · `422` (no / unknown role) (needs `users.manage` + CSRF) |
+| `POST` | `/api/v1/admin/users/{id}/reject` | Reject a pending request (kept in history, not deleted) → `200` · `404` · `409` (needs `users.manage` + CSRF) |
+| `GET` · `PUT` | `/api/v1/admin/users/{id}/roles` | Read / replace the user's role set → `200` · `404` · `409` · `422` (needs `users.read` / `users.manage`) |
+| `GET` | `/api/v1/admin/roles` | Every role + `user_count` / `permission_count` → `200` (needs `roles.read`) |
+| `POST` | `/api/v1/admin/roles` | Create a custom role → `201` · `422` (needs `roles.manage` + CSRF) |
+| `GET` | `/api/v1/admin/roles/{id}` | Permissions + assigned users → `200` · `404` (needs `roles.read`) |
+| `PATCH` · `PUT` | `/api/v1/admin/roles/{id}` · `/permissions` | Rename / re-permission a **custom** role → `200` · `404` · `409` (system) · `422` (needs `roles.manage` + CSRF) |
+| `DELETE` | `/api/v1/admin/roles/{id}` | Delete an unused custom role → `200` · `404` · `409` (system / assigned) (needs `roles.manage` + CSRF) |
 | `GET` | `/docs` · `/openapi.json` | Swagger UI / OpenAPI schema |
 | `GET` | `/` | Service metadata |
 
-All `/api/v1/assets*`, `/api/v1/incidents*`, `/api/v1/audit*` and
-`/api/v1/trash*` endpoints require authentication (`get_current_user`);
-state-changing methods also pass the `Origin`/`Referer` CSRF check. There is **no
+All `/api/v1/assets*`, `/api/v1/incidents*`, `/api/v1/audit*`, `/api/v1/trash*`
+and `/api/v1/admin*` endpoints require authentication (`get_current_user`) **and
+the matching RBAC permission** (`deps.require_permission`); an authenticated
+caller lacking the permission gets **`403`** (never `401`, never a redirect).
+State-changing methods also pass the `Origin`/`Referer` CSRF check. There is **no
 permanent delete** - `DELETE` is a *soft delete* that sets `deleted_at` /
 `deleted_by` and moves the record to **Trash**, from where it is fully
 restorable. Incident `created_by` / timeline actor - and `deleted_by` - is always
 the authenticated user, never a request-body value.
+
+### RBAC & user administration (Governance Phase 3)
+
+**Frontend visibility is not security** - every permission is enforced in the
+backend; the frontend only mirrors it.
+
+- **Permission catalog (16)**, grouped `assets` / `incidents` / `audit` /
+  `trash` / `users` / `roles` - codes like `assets.update`, `trash.restore`,
+  `users.manage`. Codes are stable machine identifiers, never translated.
+  `trash.purge` is *reserved and documented* for a future "empty Trash".
+- **System roles** (immutable, un-deletable): **Administrator** (every
+  permission - and any future one automatically), **Operator** (asset + incident
+  operations + restore, no `*.delete`, no admin), **Analyst** (read + audit +
+  trash read), **Viewer** (asset + incident read). Administrators can create
+  fully-editable **custom roles**. Viewer is only *pre-selected* in the approve
+  dialog - it is never auto-assigned.
+- **Account lifecycle** (`account_status`, single source of truth; `is_active` is
+  a derived read-only alias for `active`): `pending` → `active` / `rejected`, and
+  `active` ⇄ `disabled` for runtime enable/disable.
+- **Access-request flow** - public `POST /auth/register` creates a **`pending`**
+  account with **no roles** that **cannot authenticate**. An administrator
+  reviews it under **Administration → Access requests** and either **approves**
+  it (must assign ≥ 1 role → account becomes `active`) or **rejects** it
+  (→ `rejected`, kept in history so the email cannot be re-registered; can still
+  be approved later). Registration never signs the user in and never redirects
+  into the app.
+- **First Administrator** - created only by the explicit, idempotent
+  `python -m app.scripts.bootstrap_admin` command (env: `BOOTSTRAP_ADMIN_EMAIL`
+  / `BOOTSTRAP_ADMIN_PASSWORD`), or granted by an already-authorized
+  administrator. Public registration can **never** create an Administrator or an
+  active account. There is no "first registered user becomes admin" behaviour
+  and no auto-Viewer-on-registration.
+- **Effective permissions** = the *union* across every assigned role (no per-user
+  grants, no deny rules), resolved once per request, and **only for `active`
+  accounts** - a `pending` / `rejected` / `disabled` account with stale role
+  rows is still refused (backend checks status first).
+- **Disabled / pending / rejected users** cannot log in **and** every protected
+  request stops the moment the backend resolves the session (`403`).
+- **Last-admin protection** - the system can never reach zero active
+  Administrators: deactivating or de-roling the last one (self included) is a
+  `409`, checked under a row lock (concurrency-safe). The bootstrap Administrator
+  participates in this invariant normally - it is not "immortal".
+- **`/admin`** frontend - a permission-gated tabbed **Users / Access requests /
+  Roles** workspace with a grouped permission matrix, role assignment with a
+  live effective-permission preview, an approve dialog that requires ≥ 1 role, a
+  restrained pending-count on the Access-requests tab, and a **Forbidden** state
+  (not a login redirect) for a direct visit without access. Every admin
+  mutation is written to the audit log (`User` / `Role` entity types) -
+  `CREATE` on registration, `STATUS_CHANGED` + `UPDATE` on approve / reject /
+  enable / disable.
 
 ### Trash / soft delete (Governance Phase 2)
 
@@ -307,10 +410,34 @@ cd backend
 pip install --require-hashes --no-deps -r requirements-dev.txt && pip install --no-deps -e .
 ruff check .
 pytest                                    # fast unit tests only
-TEST_DATABASE_URL=postgresql+psycopg://u:p@localhost:5432/infraguard_test pytest -m ""
+# integration - throwaway db-test only (see "Database safety"):
+docker compose --profile test up -d db-test
+INFRAGUARD_DISPOSABLE_DB=1 \
+  TEST_DATABASE_URL=postgresql+psycopg://infraguard:infraguard_test_only@localhost:55433/infraguard_test \
+  pytest -m ""
 ```
 
-Integration tests **skip** (not fail) when `TEST_DATABASE_URL` is unset.
+Integration tests **skip** (not fail) when `TEST_DATABASE_URL` is unset, and
+**fail closed** when it is set without the `INFRAGUARD_DISPOSABLE_DB` opt-in or
+against a non-disposable database name.
+
+## Demo data
+
+`python -m app.scripts.seed_demo` (or `docker compose run --rm seed-demo`) loads
+a **curated, deterministic** dataset: ~70 assets and ~30 incidents across
+Production / Staging / Test / Development, with a realistic spread of
+criticality, severity, status and priority; incident↔asset relationships;
+backdated timelines; matching audit history; a handful of Trash records; and 3
+pending access requests - enough to exercise pagination, filters, search, the
+Dashboard KPIs and charts, Audit, Trash and Administration.
+
+It is **strictly additive and idempotent**: deterministic ids
+(`app/seeds/_common.py`) mean re-running it creates nothing new, and it never
+drops / truncates / resets, never touches user-created records, and never
+changes existing users, passwords, roles or audit history. It needs an active
+Administrator as the audit actor (run `bootstrap` first). The data lives in
+`app/seeds/` (`assets.py` / `incidents.py`); it is **not** a test fixture -
+`tests/` stays isolated.
 
 **Frontend** (Vitest + Testing Library; behavior-focused, no snapshots):
 
@@ -322,11 +449,25 @@ pnpm test          # vitest run
 pnpm build
 ```
 
+CI runs entirely on **ephemeral, disposable** databases (a throwaway service
+container / the Compose stack on a fresh runner) - never a persistent volume - so
+its `docker compose down -v` teardown is safe there and only there.
+
 **CI** (`.github/workflows/ci.yml`) runs all of the above on every PR, then
-builds the Compose stack and smoke-tests liveness, readiness, the auth / assets /
-incidents / audit APIs, the Trash + restore flow (delete → `410` on the normal
-route → found in Trash → restore → live again → audit has `DELETE` + `RESTORE`),
-and the frontend routes.
+builds the Compose stack, applies migrations, runs the explicit
+`bootstrap` job (twice, to prove idempotency), a **`seed-demo` smoke test**
+(seed → assert multi-page asset/incident counts, Critical KPIs, Trash and
+access-request counts → seed again → counts unchanged), and smoke-tests
+liveness,
+readiness, the auth / assets / incidents / audit APIs, the Trash + restore flow,
+the frontend routes, and the **access-request + RBAC** path: the bootstrapped
+Administrator logs in (never registered) → a public registration is `pending`
+and cannot log in (`403 account_pending`) → duplicate / different-casing
+registration is `409` → the admin approves it as Viewer → the approved user logs
+in with exactly the Viewer permissions → a Viewer reads but cannot mutate
+(`403`, not `401`) → a second request is rejected (`403 account_rejected`) → the
+last admin cannot self-lock (`409`) → a disabled user is blocked
+(`403 account_disabled`) → the changes are in the audit log.
 
 ## Dependency & image reproducibility
 
@@ -366,6 +507,10 @@ and the frontend routes.
 - **Network segmentation:** frontend ⇄ backend on `edge`; backend ⇄ db on
   `data` (internal). The frontend cannot reach PostgreSQL.
 - PostgreSQL has no published host port; app ports bind to `127.0.0.1`.
+- **Database safety:** `infraguard-ai_pgdata` is persistent data - never
+  `down -v` / prune it. Destructive testing uses the throwaway `db-test` service,
+  and a fail-closed guard (`INFRAGUARD_DISPOSABLE_DB` + disposable name) blocks
+  destructive helpers from any other target. See **Database safety** above.
 - Errors never leak stack traces, SQL, connection strings or credentials
   (DB-unavailable → generic `503`).
 - **Container hardening (unchanged):** non-root users, `no-new-privileges`,
@@ -575,17 +720,58 @@ milestone.
   confirm. Neutral surfaces, subtle red for the deleted state, violet for restore
 - Audit timeline / detail now render `DELETE` (red) and `RESTORE` (violet)
   events; audit history stays navigable for currently-trashed records
-- Not in scope (deferred to RBAC): **permanent purge** / empty Trash, the
-  `assets.delete` / `incidents.delete` / `trash.read` / `trash.restore` /
-  `trash.purge` permission checks (seams left visible), retention
+- Not in scope (deferred to RBAC): **permanent purge** / empty Trash, retention
+
+**Governance & Administration - Phase 3 (RBAC & User Administration)**
+
+- Normalized RBAC — `permissions` / `roles` / `user_roles` / `role_permissions`
+  (one Alembic migration, validated `upgrade → check → downgrade → upgrade`); a
+  16-permission catalog is the single source of truth for backend + frontend
+- **Backend enforces every permission** — one reusable `require_permission`
+  guard, applied across Assets / Incidents / Audit / Trash / Admin; an
+  authenticated caller without the permission gets **`403`** (never `401`)
+- Four immutable **system roles** (Administrator / Operator / Analyst / Viewer);
+  Administrator holds every permission (incl. future ones). Administrators
+  create / edit / delete **custom roles**
+- **Access-request account lifecycle** (`account_status`:
+  `pending` / `active` / `rejected` / `disabled`; email normalized + DB-unique on
+  the normalized form). Public `POST /auth/register` files a **`pending`**,
+  role-less request that cannot authenticate; an administrator **approves** it
+  (≥ 1 role required → `active`) or **rejects** it (kept in history). No
+  auto-Viewer, no auto-sign-in, no "first user becomes admin"
+- **Explicit first-Administrator bootstrap** —
+  `python -m app.scripts.bootstrap_admin` / `docker compose run --rm bootstrap`,
+  env-driven (`BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`), idempotent,
+  never resets an existing password, never runs on startup, never in production
+  unless configured
+- **last-admin lockout protection** (`409`, row-locked / concurrency-safe; the
+  bootstrap admin participates normally); pending / rejected / disabled users
+  blocked at auth **and** every request; effective permissions apply only to
+  `active` accounts
+- `GET /auth/me` now returns `account_status` + `roles` + effective
+  `permissions`; a new `/api/v1/admin/*` API for user & role administration
+  (list / access-requests / detail / approve / reject / enable-disable / role
+  assignment / role CRUD / permission catalog) — all N+1-free
+- `Administration` is a new **active**, permission-gated nav item — a tabbed
+  **Users / Access requests / Roles** workspace, grouped permission matrix,
+  approve dialog requiring ≥ 1 role with a live effective-permission preview,
+  4-state status badges, polished **Forbidden** state (not a login redirect).
+  `AuthProvider` exposes `can` / `canAny` / `canAll`; the UI checks permissions,
+  never role names. Action affordances hidden without the permission
+- Every administrative change is audited (`User` / `Role` entity types):
+  `CREATE` on registration, `STATUS_CHANGED` + `UPDATE` on approve / reject /
+  enable / disable
+- Token lifetime unchanged: absolute 30-minute JWT, no refresh tokens
+- Not in scope: SSO/OIDC, MFA, refresh-token rotation, multi-tenancy,
+  teams/groups, temporary permissions, deny rules, row-level authorization,
+  permanent Trash purge
 
 ### Planned (future phases)
 
-- Governance Phase 3+: **RBAC** / roles (`ROLE_*` / `PERMISSION_CHANGED`),
-  user-role administration, **permanent purge** of trashed records, audit
-  **retention** policy
-- Authorization / RBAC / roles; refresh-token rotation; JWT revocation; password
-  reset; email verification; OAuth; MFA
+- Governance Phase 4+: **permanent purge** of trashed records (`trash.purge`),
+  audit **retention** policy, resource-/row-level authorization
+- refresh-token rotation; JWT revocation; password reset; email verification;
+  OAuth; MFA; SSO/OIDC
 - Service & dependency modelling; asset lifecycle / obsolescence
 - Incident **impact analysis** (built on the v0.5 Incident ↔ Asset relationship)
 - Infrastructure dependency graph (Neo4j)

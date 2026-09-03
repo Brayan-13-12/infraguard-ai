@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Toaster, clearToasts } from "@/components/ui/toast";
 import { LanguageProvider } from "@/i18n";
+import { MockAuthProvider } from "@/test/MockAuthProvider";
 import * as trashService from "@/services/trash";
 import type { TrashAssetDetail, TrashIncidentDetail } from "@/types/trash";
 
@@ -87,8 +88,10 @@ const INCIDENT_DETAIL: TrashIncidentDetail = {
 function renderWithProviders(ui: React.ReactElement) {
   return render(
     <LanguageProvider>
+      <MockAuthProvider>
       {ui}
       <Toaster />
+    </MockAuthProvider>
     </LanguageProvider>,
   );
 }

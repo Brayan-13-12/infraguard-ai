@@ -39,10 +39,10 @@ requirements*.txt    # fully-resolved, hash-pinned locks (generated)
 | `GET`  | `/api/v1/health/live`  | Liveness - process is up. **Never** touches PostgreSQL. | `200` |
 | `GET`  | `/api/v1/health/ready` | Readiness - live `SELECT 1` against PostgreSQL. | `200` / `503` |
 | `GET`  | `/api/v1/health`       | Summarized status (`healthy` / `degraded`). Compatibility alias. | `200` / `503` |
-| `POST` | `/api/v1/auth/register`| Create an account. | `201` / `409` / `422` / `429` |
-| `POST` | `/api/v1/auth/login`   | Authenticate; sets the `infraguard_access` HttpOnly cookie. | `200` / `401` / `429` |
+| `POST` | `/api/v1/auth/register`| Submit an **access request** → `pending` account, no roles, no session. Status-neutral `409` on a duplicate (normalized email). | `201` / `409` / `422` / `429` |
+| `POST` | `/api/v1/auth/login`   | Authenticate; sets the `infraguard_access` HttpOnly cookie. `403 {detail:{code}}` (`account_pending` / `account_rejected` / `account_disabled`) when credentials are valid but the account is not `active`. | `200` / `401` / `403` / `429` |
 | `POST` | `/api/v1/auth/logout`  | Clear the auth cookie. | `200` |
-| `GET`  | `/api/v1/auth/me`      | The authenticated user's public profile. | `200` / `401` / `403` |
+| `GET`  | `/api/v1/auth/me`      | Current user: identity + `account_status` + `roles` + effective `permissions`. | `200` / `401` / `403` (pending / rejected / disabled) |
 | `GET`  | `/api/v1/assets`       | List assets (paginated, `q` search, catalog + `is_active` filters; `criticality` / `status` are repeatable → `IN (...)`). **Auth.** | `200` / `401` / `422` |
 | `GET`  | `/api/v1/assets/summary` | Aggregate counts (`total` / `active` / `inactive` + `by_criticality` / `by_status` / `by_environment` / `by_type`). Read-only. **Auth.** | `200` / `401` / `503` |
 | `POST` | `/api/v1/assets`       | Create an asset. **Auth + CSRF.** | `201` / `401` / `403` / `422` |
@@ -67,7 +67,26 @@ requirements*.txt    # fully-resolved, hash-pinned locks (generated)
 | `POST` | `/api/v1/trash/assets/{id}/restore` | Clear `deleted_at` / `deleted_by`; audit `RESTORE`; same id. **Auth + CSRF.** | `200` / `401` / `403` / `404` |
 | `GET`  | `/api/v1/trash/incidents` | List trashed incidents (paginated 15, max 100; `q`; repeatable `severity` / `status`; `deleted_by`; `from` / `to`). **Auth.** | `200` / `401` / `422` |
 | `GET`  | `/api/v1/trash/incidents/{id}` | Trashed incident detail (read-only + timeline + affected assets). **Auth.** | `200` / `401` / `404` |
-| `POST` | `/api/v1/trash/incidents/{id}/restore` | Restore (same id, history intact); audit `RESTORE`. **Auth + CSRF.** | `200` / `401` / `403` / `404` |
+| `POST` | `/api/v1/trash/incidents/{id}/restore` | Restore (same id, history intact); audit `RESTORE`. **`trash.restore` + CSRF.** | `200` / `401` / `403` / `404` |
+| `GET`  | `/api/v1/admin/permissions` | Grouped permission catalog. **`roles.read`.** | `200` / `401` / `403` |
+| `GET`  | `/api/v1/admin/users` | List users (`page` 20 max 100; `q`; `status` = `pending`/`active`/`rejected`/`disabled`; `role` slug; roles batched - no N+1). Rows carry `account_status`. **`users.read`.** | `200` / `401` / `403` / `422` |
+| `GET`  | `/api/v1/admin/access-requests` | Pending requests, newest first (`page`, `q`). **`users.read`.** | `200` / `401` / `403` |
+| `GET`  | `/api/v1/admin/users/{id}` | Identity + `account_status` + roles + effective permissions + `is_last_active_admin`. **`users.read`.** | `200` / `401` / `403` / `404` |
+| `PATCH`| `/api/v1/admin/users/{id}` | Enable / disable an **active** account `{is_active}` (audit `STATUS_CHANGED`). `409` if pending / rejected, or the last admin. **`users.manage` + CSRF.** | `200` / `401` / `403` / `404` / `409` |
+| `POST` | `/api/v1/admin/users/{id}/approve` | Approve a `pending` / `rejected` request: `{role_ids}` (**≥ 1**) → `active` + roles (audit `STATUS_CHANGED` + `UPDATE`). | `200` / `401` / `403` / `404` / `409` / `422` |
+| `POST` | `/api/v1/admin/users/{id}/reject` | Reject a `pending` request → `rejected` (kept, not deleted; audit `STATUS_CHANGED`). **`users.manage` + CSRF.** | `200` / `401` / `403` / `404` / `409` |
+| `GET` \| `PUT` | `/api/v1/admin/users/{id}/roles` | Read / replace the role set (audit `UPDATE`). **`users.read` / `users.manage`.** | `200` / `401` / `403` / `404` / `409` / `422` |
+| `GET`  | `/api/v1/admin/roles` | Every role + `user_count` / `permission_count` (2 aggregate queries). **`roles.read`.** | `200` / `401` / `403` |
+| `POST` | `/api/v1/admin/roles` | Create a custom role (audit `CREATE`). **`roles.manage` + CSRF.** | `201` / `401` / `403` / `422` |
+| `GET`  | `/api/v1/admin/roles/{id}` | Permissions + assigned users. **`roles.read`.** | `200` / `401` / `403` / `404` |
+| `PATCH`| `/api/v1/admin/roles/{id}` | Rename / re-describe a **custom** role (audit `UPDATE`). **`roles.manage` + CSRF.** | `200` / `401` / `403` / `404` / `409` |
+| `PUT`  | `/api/v1/admin/roles/{id}/permissions` | Replace a **custom** role's permissions (audit `PERMISSION_CHANGED`). **`roles.manage` + CSRF.** | `200` / `401` / `403` / `404` / `409` / `422` |
+| `DELETE`| `/api/v1/admin/roles/{id}` | Delete an unused custom role (audit `DELETE`). **`roles.manage` + CSRF.** | `200` / `401` / `403` / `404` / `409` |
+
+Every `assets` / `incidents` / `audit` / `trash` / `admin` endpoint requires
+authentication **and the matching RBAC permission** (`deps.require_permission`) -
+an authenticated caller without it gets **`403`** (never `401`). See
+*RBAC & user administration* below.
 
 The audit log is **read-only + append-only**: there is deliberately no
 `POST` / `PUT` / `PATCH` / `DELETE` route (those verbs → `405`).
@@ -258,21 +277,136 @@ Design:
   `dependencies=[Depends(get_current_user)]`): `summary`, `assets` /
   `assets/{id}` / `assets/{id}/restore`, and the incident triplet. Restores add
   the CSRF origin check.
-- **RBAC readiness:** the future permission boundaries (`assets.delete`,
-  `incidents.delete`, `trash.read`, `trash.restore`, `trash.purge`) are named in
-  comments at each seam; today every authenticated user may do all of them.
-- **Not implemented (deferred to RBAC):** permanent purge / "empty Trash" (no
-  hard-delete endpoint exists), retention of trashed rows, per-user
-  authorization.
+- **Authorization (Phase 3):** reads need `trash.read`, restores need
+  `trash.restore`. Moving something *to* Trash stays `assets.delete` /
+  `incidents.delete` on the domain APIs.
+- **Not implemented (deferred):** permanent purge / "empty Trash" (no hard-delete
+  endpoint; `trash.purge` reserved), retention of trashed rows.
+
+## RBAC & user administration (governance & administration - Phase 3)
+
+**Frontend visibility is not security.** Every permission is enforced here; the
+frontend mirrors it.
+
+### Model
+
+`app/models/rbac.py` - four tables (migration `d4e5f6a7b8c9`, validated
+`upgrade → check → downgrade → upgrade`):
+
+- **`permissions`** - `code` UNIQUE (`assets.read` …), `description`. A stable
+  machine identifier, never translated.
+- **`roles`** - `name` / `slug` UNIQUE, `description`, `is_system`. `is_system`
+  marks the four built-ins; their identity + permissions are **owned by code**
+  and cannot be changed through the API.
+- **`user_roles`** - composite PK `(user_id, role_id)` (no duplicate
+  assignments); `assigned_by` FK -> `users.id` `SET NULL` (a snapshot of who
+  assigned it). Index on `role_id` for the reverse lookup.
+- **`role_permissions`** - composite PK `(role_id, permission_id)`. Index on
+  `permission_id`.
+
+All FKs `ON DELETE CASCADE` except `assigned_by`.
+
+### Catalog + system roles (`app/services/rbac.py`)
+
+`PERMISSION_CATALOG` (16 entries) is the single source of truth - adding a row +
+a migration that seeds it is all it takes to introduce a permission, and
+**Administrator picks it up automatically** (its permission set is computed from
+`ALL_PERMISSION_CODES`). Groups: `assets` / `incidents` / `audit` / `trash` /
+`users` / `roles`. `trash.purge` is *reserved and documented* - not seeded.
+
+`SYSTEM_ROLES`: Administrator (all), Operator (asset + incident ops + restore, no
+`*.delete`, no admin), Analyst (read + audit + trash read), Viewer (asset +
+incident read). `ensure_system_roles` re-syncs their names + permission sets on
+every seed run; `seed_rbac` is called by the migration **and** the
+integration-test fixture. `DEFAULT_ROLE_SLUG = "viewer"` is only the
+*pre-selection* in the approve dialog - roles are never auto-assigned.
+
+### Account lifecycle + the access-request flow
+
+`AccountStatus` (`pending` / `active` / `rejected` / `disabled`) on
+`users.account_status` is the single source of truth; `User.is_active` is a
+read-only `@property` (`== "active"`). Email is normalized (`.strip().lower()`,
+`normalize_email`) and **DB-unique** on the normalized value (plus a
+`email = lower(email)` CHECK); duplicate registration - exact, different case, or
+surrounding whitespace - is a **status-neutral `409`**.
+
+- `POST /auth/register` → `create_user(..., account_status=PENDING)` - a
+  role-less request that cannot authenticate. `record_event(CREATE, USER)`.
+- `services.rbac.approve_user(target, role_ids, actor)` - requires ≥ 1 valid
+  role, sets `account_status = ACTIVE`, grants the roles (`ValueError` on none /
+  unknown, `AccountStateError` if not `pending` / `rejected`).
+- `services.rbac.reject_user(target, actor)` - `pending → rejected` only. The row
+  is **kept** (history + re-registration block); a later `approve_user` can
+  still activate it.
+- **First Administrator**: `services.bootstrap.ensure_bootstrap_admin` /
+  `python -m app.scripts.bootstrap_admin`, driven by `BOOTSTRAP_ADMIN_EMAIL` /
+  `BOOTSTRAP_ADMIN_PASSWORD` (validated: real email, password within the app
+  policy). Creates the account only if absent; otherwise activates + grants
+  Administrator **without touching the password**. Idempotent, explicit (never
+  on startup), and never auto-runs in production. There is **no** migration
+  heal and **no** "first registered user becomes admin".
+
+### Resolution + the guard
+
+`resolve_effective_permissions(db, user_id)` - one JOIN query, the **union** of
+every assigned role's permissions (no per-user grants, no deny rules).
+`deps.get_current_permissions` caches it on `request.state` (one resolution per
+request, shared by every guard and `/auth/me`).
+
+`deps.require_permission("assets.update")` is the **only** authorization guard -
+`get_current_user` runs first (**401** unauthenticated, **403** for a
+non-`active` account), then this returns **403** when the permission is absent.
+Never inline in a route body. Per-endpoint on Assets / Incidents; router-level on
+Audit (`audit.read`) and Trash (`trash.read`, + per-endpoint `trash.restore`);
+on every `/admin` route. Effective permissions are honoured **only for `active`
+accounts** - a `pending` / `rejected` user with stale `user_roles` rows is still
+refused because status is checked first.
+
+### Non-active accounts (pending / rejected / disabled)
+
+`authenticate()` checks **only the password** (constant-time, dummy-verify for an
+unknown email); the route then inspects `account_status` and returns
+`403 {detail:{code, message}}` (`account_pending` / `account_rejected` /
+`account_disabled`) - never a misleading "wrong password" for a correctly
+authenticated but non-active account, and never a status leak for a wrong
+password. `get_current_user` raises the same `403` on every protected request
+the moment the session is resolved, not just at next login.
+
+### Last-admin lockout protection
+
+Invariant: **>= 1 active user holds the Administrator role**. `set_user_active` /
+`set_user_roles` call `_assert_admins_remain`, which `SELECT ... FOR UPDATE`-locks
+the current admin `users` rows before counting - the check and the mutation are
+effectively atomic under concurrent requests. Removing the last active admin
+(deactivate, or strip the role - self included) is a **`409`**; two active admins
+-> either may step down. A blocked mutation rolls back with **no** audit event.
+
+### Admin API + audit
+
+`app/api/v1/routes/admin.py` (prefix `/admin`). List queries are N+1-free (user
+roles batched by `IN`, role counts via two `GROUP BY`s). Every mutation writes to
+the Phase-1 audit log (`User` / `Role` entity types, already in the CHECK):
+`STATUS_CHANGED` (activate), `UPDATE` (roles / role rename), `CREATE` / `DELETE`
+(custom role), `PERMISSION_CHANGED` (role permissions).
+
+### Token lifetime
+
+Unchanged: an **absolute** 30-minute HS256 JWT
+(`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, tested in `tests/unit/test_security.py`; the
+auth-cookie `Max-Age` tracks it). No refresh tokens, no activity extension, no
+revocation.
 
 ## Authentication
 
 ### User model
 
-`app/models/user.py` - `id` (UUID PK, DB-generated), `email` (unique,
-lowercased + non-empty via CHECK constraints), `password_hash`, `is_active`,
-`created_at` / `updated_at` (timezone-aware). No roles, permissions or
-organizations - authorization is a later phase.
+`app/models/user.py` - `id` (UUID PK, DB-generated), `email` (**UNIQUE** on the
+normalized value, lowercased + non-empty via CHECK constraints),
+`password_hash`, `account_status` (`pending` / `active` / `rejected` /
+`disabled`, CHECK-constrained, `server_default 'pending'`), `created_at` /
+`updated_at` (timezone-aware). `is_active` is a read-only `@property`
+(`account_status == "active"`) - there is no `is_active` column. Roles live in
+the RBAC tables (Phase 3).
 
 ### Password hashing
 
@@ -325,11 +459,16 @@ allowed; browser requests from a disallowed origin get `403`.
 * A path-scoped middleware sets `Cache-Control: no-store` + `Pragma: no-cache`
   on every `/api/v1/auth/*` response, including error responses.
 
-### Duplicate registration (accepted tradeoff)
+### Duplicate registration
 
-`register` returns an explicit `409 "Email is already registered"`, which allows
-account enumeration. Kept deliberately for portfolio usability; rate limiting
-blunts bulk probing. Production would use a generic response + out-of-band email
+`register` returns a **status-neutral** `409` -
+`"An account or access request already exists for this email."` - identical
+whether the email belongs to a `pending`, `active`, `rejected` or `disabled`
+account (never reveal which). Enforced twice: a `get_by_email` pre-check in
+`create_user`, and the `users.email` UNIQUE constraint on the normalized value
+(an `IntegrityError` is caught and re-raised as the same `409`). This still
+allows existence enumeration - kept deliberately for portfolio usability, blunted
+by rate limiting; production would use a generic response + out-of-band email
 confirmation. See `docs/architecture.md` §12.14.
 
 ### Rate limiting
@@ -340,27 +479,69 @@ Best-effort in-process fixed-window limiter (`app/core/ratelimit.py`) on
 restart** - production needs a shared store (Redis) or gateway/WAF rate
 limiting. No Redis is added for v0.2.
 
+## Database safety
+
+The developer's `infraguard-ai_pgdata` volume is **persistent user data**. It is
+never dropped / truncated / reset / `down -v`'d as part of testing. Two things
+protect it:
+
+* **Isolation** - destructive work (the integration suite; `upgrade` /
+  `downgrade` cycles) runs against the throwaway `db-test` Compose service
+  (`--profile test`, separate `pgdata_test` volume, `127.0.0.1:55433`), never the
+  main `db`.
+* **A fail-closed guard** (`app/core/db_safety.py`) - a destructive helper /
+  `tests/dbguard.py` refuses unless **both** `INFRAGUARD_DISPOSABLE_DB` is set
+  truthy **and** the target database name is disposable (`test` / `*_test`, and
+  not the app's own `DATABASE_URL`). A naming convention alone is not trusted.
+
+Regenerate demo data with the seed command below, never by resetting PostgreSQL.
+
+## Demo seed (`app/seeds/`, `python -m app.scripts.seed_demo`)
+
+Loads the curated demo dataset (~70 assets, ~30 incidents, relationships,
+backdated timelines, audit history, a little Trash, 3 pending access requests).
+
+* **Additive + idempotent** - every demo row has a deterministic id
+  (`seed_uuid(kind, key)`, uuid5 over a fixed namespace). An existing id ⇒
+  skipped. It issues no `DROP` / `TRUNCATE` / `DELETE`, never updates a row it
+  did not create, and never touches users' passwords, statuses or roles or the
+  audit history. Re-running produces zero new rows.
+* **Non-destructive ⇒ no disposable opt-in** - it is meant to run against the
+  normal dev database. The caller owns the transaction (one `commit` in the CLI);
+  a failure rolls the whole seed back.
+* **Audit** - events are written through `record_event` with a dedicated
+  `AuditContext` (actor = the earliest active Administrator; `request_id`
+  prefixed `seed-demo`). No Administrator ⇒ `SeedError` telling you to run
+  `bootstrap` first (never silently creates one).
+* **Data** lives in `app/seeds/assets.py` / `incidents.py`; `runner.py`
+  orchestrates; `timeline.py` builds well-formed backdated `IncidentEvent`s that
+  satisfy the same invariants the request-path service enforces. This is **not**
+  a test fixture.
+
 ## Migration workflow
 
 ```bash
-# Local (host), against a running PostgreSQL:
-export DATABASE_URL=postgresql+psycopg://infraguard:...@localhost:5432/infraguard
+# Local (host), against the THROWAWAY db-test (never the main db):
+docker compose --profile test up -d db-test
+export INFRAGUARD_DISPOSABLE_DB=1
+export DATABASE_URL=postgresql+psycopg://infraguard:infraguard_test_only@localhost:55433/infraguard_test
 alembic upgrade head           # apply
 alembic downgrade -1           # roll back one
 alembic revision --autogenerate -m "add <table>"   # after model changes
 
-# Docker (one-shot, never runs on `up`):
+# Apply migrations to the real dev database (one-shot, never runs on `up`):
 docker compose run --rm migrate
 ```
 
 `alembic/env.py` imports `app.db.registry` (which imports every model) so
 autogenerate sees the full metadata. The DB URL comes from `app.core.config` -
-never duplicated into Alembic files. Five migrations so far: `users` → `assets` →
+never duplicated into Alembic files. Six migrations so far: `users` → `assets` →
 `incidents` (+ `incident_assets` / `incident_events`) → `audit_events` /
-`audit_changes` → `c3d4e5f6a7b8` *add soft delete to assets and incidents*
-(chained via `down_revision`). Each was hand-reviewed and validated on the Docker
-PostgreSQL (`upgrade → downgrade → upgrade`, plus `alembic check` shows no
-model/DB drift).
+`audit_changes` → `c3d4e5f6a7b8` *add soft delete* → `d4e5f6a7b8c9` *add RBAC:
+roles, permissions, user_roles, role_permissions* (the last one **seeds** the
+catalog + system roles via `app.services.rbac.seed_rbac` and heals a pre-RBAC
+install). Each was hand-reviewed and validated on the Docker PostgreSQL
+(`upgrade → downgrade → upgrade`, plus `alembic check` shows no model/DB drift).
 
 ## Configuration & `.env` resolution
 
@@ -389,6 +570,13 @@ New v0.2 keys (see `.env.example`): `JWT_SECRET`,
 `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `AUTH_COOKIE_SECURE`, `AUTH_COOKIE_SAMESITE`,
 `AUTH_RATE_LIMIT_MAX_ATTEMPTS`, `AUTH_RATE_LIMIT_WINDOW_SECONDS`,
 `PASSWORD_MIN_LENGTH`, `PASSWORD_MAX_LENGTH`.
+
+Governance Phase 3 keys: `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` -
+read **only** by `python -m app.scripts.bootstrap_admin` (and the
+`docker compose run --rm bootstrap` one-shot). Both unset by default; the command
+fails safely (exit 1) when either is missing. Never consumed at app startup, so
+an unconfigured deployment simply has no bootstrap admin until the command is
+run.
 
 ## Local development (without Docker)
 
@@ -429,30 +617,67 @@ pytest -m integration        # integration only
 ```
 
 * **Unit** (`tests/unit/`) - no database, `ENVIRONMENT=test`, deterministic:
-  config fail-safety, Argon2 + JWT, password policy / schema serialization,
-  the rate limiter, health-endpoint behaviour, **the 422 no-reflection guard**,
-  **the no-store header rule**, **the test-DB safety guard**, the **asset
-  schema validation** (enums / IP / limits / `extra="forbid"`), and that **every
-  asset endpoint rejects an unauthenticated request** before touching the DB.
+  config fail-safety, Argon2 + JWT (incl. the **30-minute default lifetime**),
+  password policy / schema serialization, the rate limiter, health-endpoint
+  behaviour, **the 422 no-reflection guard**, **the no-store header rule**, **the
+  test-DB safety guard**, the **asset schema validation**, the **RBAC catalog**
+  (`test_rbac_catalog.py`: 16 codes, Administrator = all, role matrix), and that
+  **every asset / admin endpoint rejects an unauthenticated request** first.
 * **Integration** (`tests/integration/`) - each test runs in a transaction that
-  is rolled back; exercises the full register / login / `me` / logout API and
-  the full asset lifecycle (create / list / paginate / search / filter / detail /
-  update / deactivate / reactivate / 401 / 404 / invalid enum / invalid IP /
-  DB-error → generic `503`), plus **Trash / restore** (`test_trash_api.py`):
-  asset & incident soft delete / restore, already-deleted → `409`, missing →
-  `404`, normal route → `410`, exclusion from list / summary / picker, timeline &
-  relationships survive, and a failed delete / restore leaves **no** audit event.
-  An `auth_client` fixture provides a logged-in client.
+  is rolled back; the session-scoped fixture seeds the RBAC catalog once
+  (committed). Exercises register / login / `me` / logout, the full asset /
+  incident lifecycle, **Trash / restore** (`test_trash_api.py`), and **RBAC**:
+  - `test_rbac_permissions.py` - a parametrized **permission matrix**: for every
+    protected operation, unauthenticated → `401`, missing permission → `403`,
+    holder → success.
+  - `test_rbac_roles.py` / `test_rbac_users.py` - system-role seed, custom-role
+    CRUD (+ system immutability, delete-while-assigned `409`), user list /
+    `status` filter / detail, enable / disable, role assignment,
+    effective-permission union, disabled-user rejection.
+  - `test_rbac_lockout.py` - the last active Administrator cannot deactivate
+    themselves or lose the role; with a second admin they can; a blocked mutation
+    leaves authorization + the audit log untouched.
+  - `test_rbac_bootstrap.py` - registration → `pending` / no roles / cannot
+    authenticate; stale roles on a non-active account grant nothing;
+    `ensure_bootstrap_admin` creates an active Administrator, is idempotent (no
+    duplicate, no password reset), promotes an existing account, normalizes the
+    email, rejects a missing / weak / invalid config; the CLI never prints the
+    password and exits non-zero on a missing config.
+  - `test_auth_api.py` - registration is a `pending` access request;
+    duplicate / different-case / whitespace registration is `409`; DB uniqueness
+    holds when the service is bypassed; `pending` / `rejected` / `disabled` login
+    each return the right `403` code; a wrong password stays a generic `401`.
+  - `test_rbac_audit.py` - user / role changes are audited (`CREATE` on
+    registration, `STATUS_CHANGED` field = `account_status`); a failed mutation
+    writes **no** event; no secrets leak.
+  - `test_seed_demo.py` - first run creates ~70 assets / ~30 incidents; second
+    run is a no-op (no duplicates); hand-made records and existing users
+    (password hash, status, roles) survive; relationships have no orphans;
+    trashed rows are excluded from normal lists but present in Trash; the
+    Dashboard summaries reflect the seed; both lists span multiple pages; the
+    seed raises `SeedError` (writing nothing) when no active Administrator
+    exists.
 
-### Integration test database safety (`tests/dbguard.py`)
+  `auth_client` is a logged-in **Administrator** - the fixture registers, then
+  activates + assigns the role directly on the test session (the equivalent of an
+  approval). `make_client` does the same for scoped sessions
+  (`roles=["viewer"]`, `roles=[]`, …).
+
+### Integration test database safety (`tests/dbguard.py` + `app/core/db_safety.py`)
 
 * **`TEST_DATABASE_URL` unset** → integration tests **skip**.
 * **`TEST_DATABASE_URL` set** → it must pass the guard *and* be reachable, or the
-  suite **fails** (never silently skips - important in CI):
-  * the database **name must be `test` or end with `_test`** (case-insensitive);
-  * it must not equal the application's own `DATABASE_URL` database.
-* Only then does the fixture run `drop_all` / `create_all`. This makes it
-  impossible to point the destructive fixture at a real database by mistake.
+  suite **fails** (never silently skips - important in CI). The guard is
+  **fail-closed** and needs *both*:
+  * **`INFRAGUARD_DISPOSABLE_DB` set truthy** (`1` / `true` / `yes` / `on`) - an
+    explicit "this target is throwaway" opt-in; and
+  * a **disposable name** - `test` or ending `_test` (case-insensitive), and not
+    equal to the application's own `DATABASE_URL` database.
+* Only then does the fixture run `drop_all` / `create_all`. Point it at the
+  Compose `db-test` service (`127.0.0.1:55433`); a naming convention alone is
+  never trusted, and there is no `--force`.
+* `test_db_safety.py` / `test_dbguard.py` verify the guard: main-DB URL →
+  refused; disposable name without the opt-in → refused; both present → allowed.
 
 ## Dependency management
 

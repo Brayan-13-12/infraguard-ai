@@ -8,14 +8,17 @@
 * ``POST   /api/v1/assets/{id}/reactivate`` - reactivate (idempotent)
 * ``DELETE /api/v1/assets/{id}``            - move to Trash (soft delete, recoverable)
 
-Every endpoint requires an authenticated, active user (``get_current_user`` at
-the router level). State-changing methods additionally pass the CSRF origin
-check. ``DELETE`` is a **soft delete** - the row is stamped ``deleted_at`` /
-``deleted_by``, dropped from every normal query, and restorable from
-``/api/v1/trash``. There is no permanent purge (deferred to RBAC). Every normal
-read here rejects a trashed asset with ``410 Gone``.
+Authorization (RBAC): every endpoint requires an authenticated, active user
+**and** the matching permission - ``assets.read`` for the list / detail /
+summary, ``assets.create`` for ``POST``, ``assets.update`` for ``PATCH`` and the
+deactivate / reactivate lifecycle, ``assets.delete`` to move an asset to Trash.
+An authenticated caller without the permission gets ``403`` (never ``401``).
+State-changing methods additionally pass the CSRF origin check.
 
-Future RBAC permission boundary: ``assets.delete``.
+``DELETE`` is a **soft delete** - the row is stamped ``deleted_at`` /
+``deleted_by``, dropped from every normal query, and restorable from
+``/api/v1/trash``. There is no permanent purge. Every normal read here rejects a
+trashed asset with ``410 Gone``.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from fastapi import APIRouter, Depends, Query, status
 from fastapi.exceptions import HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_trusted_origin
+from app.api.deps import get_current_user, require_permission, require_trusted_origin
 from app.api.request_context import get_audit_context
 from app.db.session import get_db
 from app.models.asset import Asset, AssetStatus, AssetType, Criticality, Environment
@@ -59,6 +62,11 @@ router = APIRouter(
     tags=["assets"],
     dependencies=[Depends(get_current_user)],
 )
+
+_CAN_READ = Depends(require_permission("assets.read"))
+_CAN_CREATE = Depends(require_permission("assets.create"))
+_CAN_UPDATE = Depends(require_permission("assets.update"))
+_CAN_DELETE = Depends(require_permission("assets.delete"))
 
 _NOT_FOUND = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
 _IN_TRASH = HTTPException(
@@ -98,7 +106,7 @@ def _asset_audit_snapshot(asset: Asset) -> dict[str, object]:
     return {f: getattr(asset, f) for f in _AUDITED_ASSET_FIELDS}
 
 
-@router.get("", response_model=AssetPage, summary="List assets")
+@router.get("", response_model=AssetPage, summary="List assets", dependencies=[_CAN_READ])
 def list_assets_endpoint(
     db: Session = Depends(get_db),
     page: int = Query(1, ge=1),
@@ -135,6 +143,7 @@ def list_assets_endpoint(
     "/summary",
     response_model=AssetSummary,
     summary="Aggregate asset counts for the dashboard",
+    dependencies=[_CAN_READ],
 )
 def asset_summary_endpoint(db: Session = Depends(get_db)) -> AssetSummary:
     # Declared before ``/{asset_id}`` so "summary" is not captured as a UUID path.
@@ -146,6 +155,7 @@ def asset_summary_endpoint(db: Session = Depends(get_db)) -> AssetSummary:
     response_model=AssetRead,
     summary="Get an asset",
     responses={404: {"model": MessageResponse}},
+    dependencies=[_CAN_READ],
 )
 def get_asset_endpoint(asset_id: uuid.UUID, db: Session = Depends(get_db)) -> AssetRead:
     return AssetRead.model_validate(_load(db, asset_id))
@@ -157,7 +167,7 @@ def get_asset_endpoint(asset_id: uuid.UUID, db: Session = Depends(get_db)) -> As
     status_code=status.HTTP_201_CREATED,
     summary="Create an asset",
     responses={422: {"description": "Validation error"}},
-    dependencies=[Depends(require_trusted_origin)],
+    dependencies=[Depends(require_trusted_origin), _CAN_CREATE],
 )
 def create_asset_endpoint(
     payload: AssetCreate,
@@ -188,7 +198,7 @@ def create_asset_endpoint(
     response_model=AssetRead,
     summary="Update an asset (partial, content only)",
     responses={404: {"model": MessageResponse}, 422: {"description": "Validation error"}},
-    dependencies=[Depends(require_trusted_origin)],
+    dependencies=[Depends(require_trusted_origin), _CAN_UPDATE],
 )
 def update_asset_endpoint(
     asset_id: uuid.UUID,
@@ -223,7 +233,7 @@ def update_asset_endpoint(
     response_model=AssetRead,
     summary="Deactivate an asset (soft, idempotent)",
     responses={404: {"model": MessageResponse}},
-    dependencies=[Depends(require_trusted_origin)],
+    dependencies=[Depends(require_trusted_origin), _CAN_UPDATE],
 )
 def deactivate_asset_endpoint(
     asset_id: uuid.UUID,
@@ -238,7 +248,7 @@ def deactivate_asset_endpoint(
     response_model=AssetRead,
     summary="Reactivate an asset (idempotent)",
     responses={404: {"model": MessageResponse}},
-    dependencies=[Depends(require_trusted_origin)],
+    dependencies=[Depends(require_trusted_origin), _CAN_UPDATE],
 )
 def reactivate_asset_endpoint(
     asset_id: uuid.UUID,
@@ -256,7 +266,7 @@ def reactivate_asset_endpoint(
         404: {"model": MessageResponse},
         409: {"model": MessageResponse, "description": "Already in Trash"},
     },
-    dependencies=[Depends(require_trusted_origin)],
+    dependencies=[Depends(require_trusted_origin), _CAN_DELETE],
 )
 def delete_asset_endpoint(
     asset_id: uuid.UUID,

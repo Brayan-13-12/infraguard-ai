@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AssetsBrowser } from "@/components/assets/AssetsBrowser";
 import { LanguageProvider } from "@/i18n";
+import { VIEWER_USER } from "@/test/fixtures";
+import { MockAuthProvider } from "@/test/MockAuthProvider";
 import { notifyAssetsChanged } from "@/lib/assetsRefresh";
 import * as assetService from "@/services/assets";
 import type { Asset, AssetPage } from "@/types/asset";
@@ -47,10 +49,12 @@ const page = (items: Asset[], over: Partial<AssetPage> = {}): AssetPage => ({
   ...over,
 });
 
-function renderBrowser() {
+function renderBrowser(user?: Parameters<typeof MockAuthProvider>[0]["user"]) {
   return render(
     <LanguageProvider>
-      <AssetsBrowser />
+      <MockAuthProvider user={user}>
+        <AssetsBrowser />
+      </MockAuthProvider>
     </LanguageProvider>,
   );
 }
@@ -89,6 +93,16 @@ describe("AssetsBrowser", () => {
       "href",
       "/assets/new",
     );
+  });
+
+  it("hides the 'New asset' action from a user without assets.create", async () => {
+    vi.spyOn(assetService, "listAssets").mockResolvedValue({
+      ok: true,
+      data: page([asset({ name: "billing-db" })]),
+    });
+    renderBrowser(VIEWER_USER);
+    await screen.findAllByRole("link", { name: "billing-db" });
+    expect(screen.queryByRole("link", { name: /nuevo activo/i })).not.toBeInTheDocument();
   });
 
   it("renders an error state and retries on demand", async () => {
