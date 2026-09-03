@@ -7,6 +7,7 @@ import {
   SettingsIcon,
   ShieldIcon,
   SparklesIcon,
+  TrashIcon,
 } from "@/components/ui/icons";
 
 export type NavStatus = "active" | "soon";
@@ -24,8 +25,8 @@ export interface NavItem {
 
 /**
  * A single, flat navigation list - no visible section headings. Dashboard,
- * Assets, Incidents and Audit are real routes; AI Assistant and Settings are
- * shown as `aria-disabled` (not navigable) with a quiet lock marker +
+ * Assets, Incidents, Audit and Trash are real routes; AI Assistant and Settings
+ * are shown as `aria-disabled` (not navigable) with a quiet lock marker +
  * "Próximamente" tooltip.
  */
 export const NAV_ITEMS: NavItem[] = [
@@ -33,6 +34,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Assets", href: "/assets", icon: BoxIcon, status: "active" },
   { label: "Incidents", href: "/incidents", icon: ShieldIcon, status: "active" },
   { label: "Audit", href: "/audit", icon: HistoryIcon, status: "active" },
+  { label: "Trash", href: "/trash", icon: TrashIcon, status: "active" },
   { label: "AI Assistant", href: "/ai", icon: SparklesIcon, status: "soon" },
   { label: "Settings", href: "/settings", icon: SettingsIcon, status: "soon" },
 ];

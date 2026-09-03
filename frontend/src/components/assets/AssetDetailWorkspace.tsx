@@ -4,8 +4,10 @@ import {
   AssetDetailBadges,
   AssetDetailContent,
   AssetLifecycleButton,
+  MoveToTrashButton,
 } from "@/components/assets/AssetDetail";
 import { AssetDetailLoader } from "@/components/assets/AssetDetailLoader";
+import { InTrashNotice } from "@/components/trash/InTrashNotice";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { WorkspaceDialog } from "@/components/ui/overlay";
@@ -51,7 +53,8 @@ export function AssetDetailWorkspace({ id }: { id: string }) {
         );
 
         const footer = asset ? (
-          <div className="flex items-center justify-end">
+          <div className="flex items-center justify-between gap-3">
+            <MoveToTrashButton asset={asset} onDeleted={close} />
             <AssetLifecycleButton asset={asset} onChanged={setAsset} />
           </div>
         ) : undefined;
@@ -65,6 +68,8 @@ export function AssetDetailWorkspace({ id }: { id: string }) {
           >
             {state.kind === "loading" ? (
               <WorkspaceSkeleton />
+            ) : state.kind === "gone" ? (
+              <InTrashNotice kind="assets" compact />
             ) : state.kind === "notfound" || state.kind === "error" ? (
               <div className="flex flex-col items-center gap-3 py-16 text-center">
                 <p className="text-sm font-medium text-foreground">

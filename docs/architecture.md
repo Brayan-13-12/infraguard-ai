@@ -11,6 +11,17 @@
 > * **Assets - Infrastructure Inventory:** the `Asset` entity, authenticated
 >   `/api/v1/assets` CRUD + search + filters + pagination, soft deactivation, and
 >   the `/assets` frontend module. (Section 13.)
+> * **Product Experience:** visual direction, Dashboard, overlay/toast/skeleton
+>   foundations, route-aware detail workspaces. (Section 14.)
+> * **Incident Management:** the `Incident` entity + persisted timeline +
+>   `Incident ↔ Asset` M2M, `/api/v1/incidents`, the `/incidents` module.
+>   (Sections 15-16.)
+> * **Governance P1 - Audit Log:** append-only `audit_events` / `audit_changes`,
+>   route-layer emission, read-only API, the `/audit` activity timeline.
+>   (Section 17.)
+> * **Governance P2 - Trash / Restore:** `deleted_at` / `deleted_by` soft delete
+>   for Assets & Incidents, the dedicated Trash API, the `/trash` recovery
+>   module, audit `DELETE` / `RESTORE`. (Section 18a.)
 
 ## 1. Project purpose
 
@@ -635,9 +646,10 @@ endpoint authenticated); writes also `Depends(require_trusted_origin)`.
 | `GET` | `/api/v1/assets/summary` | aggregate counts; declared **before** `/{id}` so "summary" isn't parsed as a UUID | `200` / `401` / `503` |
 | `GET` | `/api/v1/assets/{id}` | | `200` / `401` / `404` |
 | `POST` | `/api/v1/assets` | `AssetCreate` (`extra="forbid"`) | `201` / `401` / `403` / `422` |
-| `PATCH` | `/api/v1/assets/{id}` | `AssetUpdate` (`extra="forbid"`, no `is_active`) - only sent fields change | `200` / `401` / `403` / `404` / `422` |
+| `PATCH` | `/api/v1/assets/{id}` | `AssetUpdate` (`extra="forbid"`, no `is_active`) - only sent fields change | `200` / `401` / `403` / `404` / `410` / `422` |
 | `POST` | `/api/v1/assets/{id}/deactivate` | idempotent; `updated_at` only moves on a real change | `200` / `401` / `403` / `404` |
 | `POST` | `/api/v1/assets/{id}/reactivate` | idempotent | `200` / `401` / `403` / `404` |
+| `DELETE` | `/api/v1/assets/{id}` | move to Trash (soft delete; §18a); actor from session; audit `DELETE` | `200` / `401` / `403` / `404` / `409` |
 
 **Pagination** response: `{ items, page, page_size, total, total_pages }`.
 `total_pages = ceil(total / page_size)` (0 when empty). Ordering is
@@ -662,14 +674,19 @@ schema fills every catalog key (`0` when absent) so the Dashboard renders a
 stable KPI/chart set. Read-only: no model change, no migration. A DB failure is
 sanitised to a generic `503` by the global `OperationalError` handler.
 
-### 13.4 Deactivation - decision
+### 13.4 Deactivation vs Trash - decision
 
-There is **no `DELETE`**. Assets carry history and references, so a hard delete
-is the wrong default. Lifecycle is a **dedicated pair of POST endpoints**
-(`/deactivate`, `/reactivate`) rather than a field on `PATCH`: the intent is
-explicit, the calls are idempotent, they are easy to audit later, and `PATCH`
-stays purely about content (`AssetUpdate` has no `is_active`, and sending it is
-a `422`). A deactivated asset stays fully queryable with `is_active=false`.
+`deactivate` / `reactivate` is an **operational** lifecycle toggle — a
+deactivated asset stays fully queryable with `is_active=false`. It is a
+**dedicated pair of POST endpoints** rather than a field on `PATCH`: explicit,
+idempotent, auditable, and `PATCH` stays purely about content (`AssetUpdate` has
+no `is_active`, and sending it is a `422`).
+
+`DELETE` (added in Phase 2, §18a) is **removal from the working set** — a *soft
+delete* that sets `deleted_at` / `deleted_by` and hides the asset everywhere
+except **Trash**, from which it is fully restorable under the same id. There is
+still **no hard delete**. The two axes are independent (an asset can be
+deactivated, trashed, or both).
 
 ### 13.5 Frontend
 
@@ -700,8 +717,9 @@ depend on colour. The `Assets` nav label, like all module names, stays English.
 - Search is `ILIKE '%...%'` with no trigram index (fine at this scale).
 - No per-asset ownership / authorization - any authenticated user can edit any
   asset (RBAC is a dedicated future phase).
-- No bulk operations, CSV import/export, or audit log.
+- No bulk operations, CSV import/export.
 - No optimistic-concurrency token on `PATCH` (last write wins).
+- Audit log ships in §17; soft delete / Trash in §18a.
 
 ## 14. Product Experience (visual direction, Dashboard, foundations)
 
@@ -968,6 +986,9 @@ field). DB errors are sanitised to a generic 503 by the global handlers.
 | `POST /api/v1/incidents/{id}/resolve` | force `Resolved` (idempotent) |
 | `POST /api/v1/incidents/{id}/reopen` | move a terminal incident back to `Open` (idempotent for active ones) |
 | `POST /api/v1/incidents/{id}/comments` | append a `COMMENT` timeline entry |
+| `DELETE /api/v1/incidents/{id}` | move to Trash (soft delete; §18a) - keeps the timeline + affected-asset links; actor from session; audit `DELETE`; `409` if already trashed |
+
+`GET` / `PATCH` on a trashed incident return **`410 Gone`** (§18a), not `404`.
 
 ### 15.6 Frontend
 
@@ -1279,16 +1300,96 @@ review found a plain table made every event look alike and buried "what changed"
   fields beyond the 8 000-char value cap (truncated with an ellipsis marker). The
   timeline's inline `change_preview` is capped at 3 rows — the rest is a `+N`
   count until the event is opened.
-- `DELETE` / `RESTORE` (Trash) and `ROLE_*` / `PERMISSION_CHANGED` (RBAC) are the
-  next Governance phases that will start emitting the reserved vocabulary.
+- `ROLE_*` / `PERMISSION_CHANGED` (RBAC) are the next Governance phase that will
+  start emitting the reserved vocabulary. `DELETE` / `RESTORE` **are** emitted as
+  of Phase 2 (§18a).
+
+## 18a. Trash / Restore (Governance & Administration — Phase 2)
+
+### Scope
+
+Soft delete for Assets and Incidents, a dedicated **Trash** module to browse and
+**restore** them, and audit `DELETE` / `RESTORE` events. **Out of scope
+(deferred to RBAC):** permanent purge / "empty Trash", per-permission checks
+(`assets.delete`, `incidents.delete`, `trash.read`, `trash.restore`,
+`trash.purge` — seams left visible), retention of trashed rows, User
+Administration.
+
+### Model & migration
+
+Migration `c3d4e5f6a7b8` (validated `upgrade → downgrade → upgrade` +
+`alembic check`) adds to **both** `assets` and `incidents`:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `deleted_at` | `timestamptz` null | `NULL` = live, non-`NULL` = trashed |
+| `deleted_by` | `uuid` null | FK → `users.id` `ON DELETE SET NULL`; **set from the session**, never the payload |
+
+Plus a **partial index** `ix_{table}_deleted_at WHERE deleted_at IS NOT NULL` —
+the Trash lists are the only readers and always filter on it, so the live tables
+pay nothing.
+
+### Query exclusion — explicit, not a global filter
+
+The codebase style is explicit conditions, not SQLAlchemy events. `services/
+assets.py` and `services/incidents.py` expose `_live()` / `_live_incident()` /
+`_live_asset()` helpers (`col.deleted_at.is_(None)`) that **every** live read
+prepends: list `_conditions()`, both `/summary` `GROUP BY` queries, the incident
+asset-existence check, dashboard counts. `get_asset` / `get_incident` stay plain
+PK fetches — the **route** owns policy and raises **`410 Gone`** (`_IN_TRASH`,
+distinct from `404`) when a normal route touches a trashed record. `DELETE` on an
+already-trashed record → **`409 Conflict`**.
+
+### Trash service & API
+
+`services/trash.py` is the dedicated path: `list_trashed_assets` /
+`list_trashed_incidents` (server-side filters + pagination; `outerjoin(User)` for
+the deleter email and a correlated affected-count sub-select — **no N+1**),
+`get_trashed_*`, `trash_summary`, and the `soft_delete_* / restore_*` mutators,
+which set/clear the two columns and `flush` but **never commit** — so the
+mutation and its audit `DELETE` / `RESTORE` event are one transaction (same
+`record_event` path as Phase 1; no second audit system).
+
+`routes/trash.py` (prefix `/trash`, `Depends(get_current_user)`): `GET /summary`,
+`GET|POST` on `/assets`, `/assets/{id}`, `/assets/{id}/restore` and the incident
+triplet. Restores add the CSRF origin check. Defaults: assets 20 / incidents 15
+per page, max 100.
+
+### Relationship preservation
+
+Soft-deleting an incident does not touch `incident_events` or `incident_assets`;
+soft-deleting an asset does not touch `incident_assets`. `get_incident_detail`
+does **not** filter trashed assets out of the affected list — they flow through
+with `deleted_at` populated so the UI badges them *En papelera*. Restore only
+clears the columns; the same id reappears with its full history. Deleting an
+incident never affects an asset and vice-versa.
+
+### Frontend
+
+A fifth **active** nav item **`Trash`** (English), between `Audit` and the
+disabled `AI Assistant`. `/trash` is a URL-backed tabbed recovery workspace
+(`?type=assets|incidents`) with a thin summary strip (no KPI cards), collapsible
+server-side filters mirrored to the URL, real pagination, and desktop-table /
+mobile-card lists whose only row actions are **View** and **Restore** (no Edit
+while trashed). Read-only detail opens in a route-aware `WorkspaceDialog` at
+`/trash/{assets,incidents}/{id}` (distinct from the live routes; `assets` /
+`incidents` are static siblings so the interceptors need no dispatch). **Move to
+Trash** is a restrained non-primary action in the Asset/Incident detail
+workspaces behind a `ConfirmDialog`; on success the detail closes, the list
+refreshes in place, and a toast confirms. A `410` from a normal detail route maps
+to an **`InTrashNotice`** ("Este elemento está en Trash" + link), not a 404
+(spec §28 Option B). The audit timeline/detail render `DELETE` (red) / `RESTORE`
+(violet). Visual language: neutral surfaces, subtle red for the deleted state,
+violet for restore — **not** a red page. No "Eliminar definitivamente" anywhere.
 
 ## 18. Future direction
 
 Later, dedicated feature branches are expected to add:
 
-- **Governance & Administration** — Phase 1 (**Audit Log**, §17) has shipped;
-  next: soft delete + **Trash** (`DELETE` / `RESTORE`), **RBAC** (`ROLE_*` /
-  `PERMISSION_CHANGED`), user-role administration, audit **retention** policy
+- **Governance & Administration** — Phase 1 (**Audit Log**, §17) and Phase 2
+  (soft delete + **Trash**, `DELETE` / `RESTORE`, §18a) have shipped; next:
+  **RBAC** (`ROLE_*` / `PERMISSION_CHANGED`), user-role administration,
+  **permanent purge** of trashed records, audit **retention** policy
 - Authorization / RBAC; refresh tokens + revocation; password reset; email
   verification; OAuth; MFA
 - The InfraGuard domain model (assets, services, dependencies, incidents)
@@ -1301,7 +1402,8 @@ graph LR
     v01["v0.1<br/>Bootstrap"] --> v02["v0.2<br/>Auth & users"]
     v02 --> domain["Domain model<br/>(assets, incidents)"]
     domain --> audit["Governance P1<br/>(Audit Log)"]
-    audit --> gov["Governance P2+<br/>(Trash, RBAC)"]
+    audit --> trash["Governance P2<br/>(Trash / Restore)"]
+    trash --> gov["Governance P3+<br/>(RBAC, purge)"]
     domain --> graph["Neo4j<br/>dependency graph"]
     domain --> ai["AI incident analysis"]
     domain --> k8s["Kubernetes + Helm"]

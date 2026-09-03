@@ -22,6 +22,12 @@ def _escape_like(term: str) -> str:
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _live() -> ColumnElement[bool]:
+    """Every normal query excludes soft-deleted (trashed) assets. The dedicated
+    Trash service is the only path that returns them."""
+    return Asset.deleted_at.is_(None)
+
+
 @dataclass(frozen=True, slots=True)
 class AssetQuery:
     search: str | None = None
@@ -38,7 +44,7 @@ class AssetQuery:
 
 
 def _conditions(q: AssetQuery) -> list[ColumnElement[bool]]:
-    conds: list[ColumnElement[bool]] = []
+    conds: list[ColumnElement[bool]] = [_live()]
     if q.asset_type is not None:
         conds.append(Asset.asset_type == q.asset_type.value)
     if q.environment is not None:
@@ -92,7 +98,7 @@ def _grouped_counts(
     """``{catalog_value: count}`` for one column, every catalog key present."""
     counts = {member.value: 0 for member in enum_cls}
     rows = db.execute(
-        select(column, func.count()).select_from(Asset).group_by(column)
+        select(column, func.count()).select_from(Asset).where(_live()).group_by(column)
     ).all()
     for value, count in rows:
         if value in counts:
@@ -110,7 +116,9 @@ def get_asset_summary(db: Session) -> dict[str, object]:
         select(
             func.count(),
             func.count().filter(Asset.is_active.is_(True)),
-        ).select_from(Asset)
+        )
+        .select_from(Asset)
+        .where(_live())
     ).one()
     total, active = int(total), int(active)
     return {
@@ -125,6 +133,9 @@ def get_asset_summary(db: Session) -> dict[str, object]:
 
 
 def get_asset(db: Session, asset_id: uuid.UUID) -> Asset | None:
+    """Plain primary-key fetch - returns the row even if it is in Trash. Callers
+    (the routes) decide the policy: normal endpoints reject a trashed asset, the
+    delete endpoint needs to see it to report "already in Trash"."""
     return db.get(Asset, asset_id)
 
 

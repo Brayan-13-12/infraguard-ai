@@ -16,12 +16,13 @@ import {
 import { Tabs, tabPanelProps, useTabsId } from "@/components/ui/Tabs";
 import { ConfirmDialog } from "@/components/ui/overlay";
 import { toast } from "@/components/ui/toast";
-import { ArrowLeftIcon } from "@/components/ui/icons";
+import { ArrowLeftIcon, TrashIcon } from "@/components/ui/icons";
 import { LANGUAGE_LOCALES, useTranslation, type TranslationKey } from "@/i18n";
 import { ASSET_LIMITS } from "@/lib/config";
 import { notifyAssetsChanged } from "@/lib/assetsRefresh";
+import { notifyTrashChanged } from "@/lib/trashRefresh";
 import { isValidIpAddress } from "@/lib/assetValidation";
-import { deactivateAsset, reactivateAsset, updateAsset } from "@/services/assets";
+import { deactivateAsset, deleteAsset, reactivateAsset, updateAsset } from "@/services/assets";
 import type { Asset, AssetUpdateInput } from "@/types/asset";
 
 import { AssetStatusBadge, CriticalityBadge } from "./AssetBadges";
@@ -129,6 +130,73 @@ export function AssetLifecycleButton({
         confirmLabel={t("assetDetail.confirm")}
         cancelLabel={t("assetForm.cancel")}
         tone={active ? "danger" : "primary"}
+        loading={busy}
+        error={error}
+      />
+    </>
+  );
+}
+
+/**
+ * "Move to Trash" - a restrained, non-primary destructive action (soft delete).
+ * Behind a {@link ConfirmDialog}. On success it tells the inventory + Trash
+ * lists to refetch, toasts, and calls `onDeleted` (the workspace closes / the
+ * full page navigates away). Recoverable from `/trash`; there is no permanent
+ * delete here.
+ */
+export function MoveToTrashButton({
+  asset,
+  onDeleted,
+  size = "sm",
+}: {
+  asset: Asset;
+  onDeleted: () => void;
+  size?: "sm" | "md";
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    const res = await deleteAsset(asset.id);
+    setBusy(false);
+    if (res.ok) {
+      setOpen(false);
+      notifyAssetsChanged();
+      notifyTrashChanged({ scope: "assets" });
+      toast({ tone: "warning", description: t("assetDetail.movedToTrashToast") });
+      onDeleted();
+    } else {
+      setError(t("assetDetail.moveToTrashError"));
+    }
+  }
+
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size={size}
+        className="text-danger hover:bg-danger/10 hover:text-danger"
+        onClick={() => {
+          setError(null);
+          setOpen(true);
+        }}
+      >
+        <TrashIcon className="h-3.5 w-3.5" />
+        {t("assetDetail.moveToTrash")}
+      </Button>
+      <ConfirmDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        onConfirm={() => void run()}
+        title={t("assetDetail.moveToTrashTitle")}
+        description={t("assetDetail.moveToTrashBody", { name: asset.name })}
+        confirmLabel={t("assetDetail.moveToTrashConfirm")}
+        cancelLabel={t("assetForm.cancel")}
+        tone="danger"
         loading={busy}
         error={error}
       />
@@ -413,9 +481,12 @@ export function AssetDetailContent({
 export function AssetDetail({
   asset,
   onChanged,
+  onDeleted,
 }: {
   asset: Asset;
   onChanged: (asset: Asset) => void;
+  /** Called after a successful "Move to Trash" (the page navigates to /assets). */
+  onDeleted?: () => void;
 }) {
   const { t } = useTranslation();
 
@@ -438,7 +509,10 @@ export function AssetDetail({
             <AssetDetailBadges asset={asset} />
           </div>
         </div>
-        <AssetLifecycleButton asset={asset} onChanged={onChanged} />
+        <div className="flex flex-wrap items-center gap-2">
+          <MoveToTrashButton asset={asset} onDeleted={onDeleted ?? (() => {})} />
+          <AssetLifecycleButton asset={asset} onChanged={onChanged} />
+        </div>
       </header>
 
       <div className="rounded-xl border border-border bg-surface p-5 sm:p-6">

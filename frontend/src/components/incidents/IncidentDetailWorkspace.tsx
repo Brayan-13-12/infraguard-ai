@@ -4,8 +4,10 @@ import {
   IncidentDetailBadges,
   IncidentDetailContent,
   IncidentLifecycleActions,
+  MoveIncidentToTrashButton,
 } from "@/components/incidents/IncidentDetail";
 import { IncidentDetailLoader } from "@/components/incidents/IncidentDetailLoader";
+import { InTrashNotice } from "@/components/trash/InTrashNotice";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { WorkspaceDialog } from "@/components/ui/overlay";
@@ -52,7 +54,8 @@ export function IncidentDetailWorkspace({ id }: { id: string }) {
         );
 
         const footer = incident ? (
-          <div className="flex items-center justify-end">
+          <div className="flex items-center justify-between gap-3">
+            <MoveIncidentToTrashButton incident={incident} onDeleted={close} />
             <IncidentLifecycleActions incident={incident} onChanged={setIncident} />
           </div>
         ) : undefined;
@@ -66,6 +69,8 @@ export function IncidentDetailWorkspace({ id }: { id: string }) {
           >
             {state.kind === "loading" ? (
               <WorkspaceSkeleton />
+            ) : state.kind === "gone" ? (
+              <InTrashNotice kind="incidents" compact />
             ) : state.kind === "notfound" || state.kind === "error" ? (
               <div className="flex flex-col items-center gap-3 py-16 text-center">
                 <p className="text-sm font-medium text-foreground">

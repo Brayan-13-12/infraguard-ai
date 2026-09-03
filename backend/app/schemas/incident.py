@@ -170,7 +170,12 @@ class IncidentCommentCreate(BaseModel):
 
 
 class IncidentAssetRef(BaseModel):
-    """Compact projection of an affected asset, embedded in the incident detail."""
+    """Compact projection of an affected asset, embedded in the incident detail.
+
+    ``deleted_at`` is non-null when the asset has been moved to Trash: the
+    persisted relationship is kept (history), and the UI badges it "En papelera"
+    rather than dropping it.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -181,6 +186,7 @@ class IncidentAssetRef(BaseModel):
     criticality: Criticality
     status: AssetStatus
     is_active: bool
+    deleted_at: datetime | None = None
 
 
 class IncidentEventRead(BaseModel):

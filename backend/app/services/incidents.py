@@ -71,6 +71,15 @@ def _escape_like(term: str) -> str:
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _live_incident() -> ColumnElement[bool]:
+    """Every normal incident query excludes soft-deleted (trashed) incidents."""
+    return Incident.deleted_at.is_(None)
+
+
+def _live_asset() -> ColumnElement[bool]:
+    return Asset.deleted_at.is_(None)
+
+
 def _clock() -> Iterator[datetime]:
     """Monotonic timestamp source so multiple events written in one operation
     keep a stable chronological order (UUID ids are not time-ordered)."""
@@ -115,7 +124,7 @@ def _affected_count_subquery() -> ColumnElement[int]:
 
 
 def _conditions(q: IncidentQuery) -> list[ColumnElement[bool]]:
-    conds: list[ColumnElement[bool]] = []
+    conds: list[ColumnElement[bool]] = [_live_incident()]
     if q.severity:
         conds.append(Incident.severity.in_([s.value for s in q.severity]))
     if q.status:
@@ -188,6 +197,9 @@ def list_incidents(
 
 
 def get_incident(db: Session, incident_id: uuid.UUID) -> Incident | None:
+    """Plain primary-key fetch - returns the row even if it is in Trash. The
+    routes decide the policy (normal endpoints reject a trashed incident; the
+    delete endpoint needs to see it to report "already in Trash")."""
     return db.get(Incident, incident_id)
 
 
@@ -227,9 +239,11 @@ def existing_asset_ids(
     reject unknown asset relationships with a 422."""
     if not asset_ids:
         return set()
+    # Trashed assets are not linkable to incidents (a new / edited relationship
+    # must point at a live asset). Existing persisted links are untouched.
     return set(
         db.execute(
-            select(Asset.id).where(Asset.id.in_(asset_ids))
+            select(Asset.id).where(Asset.id.in_(asset_ids), _live_asset())
         ).scalars()
     )
 
@@ -563,7 +577,10 @@ def add_comment(
 def _grouped_counts(db: Session, column, enum_cls: type) -> dict[str, int]:
     counts = {member.value: 0 for member in enum_cls}
     for value, count in db.execute(
-        select(column, func.count()).select_from(Incident).group_by(column)
+        select(column, func.count())
+        .select_from(Incident)
+        .where(_live_incident())
+        .group_by(column)
     ).all():
         if value in counts:
             counts[value] = int(count)
@@ -599,7 +616,9 @@ def get_incident_summary(db: Session) -> dict[str, object]:
                         Incident.resolved_at >= cutoff,
                     )
                 ),
-            ).select_from(Incident)
+            )
+            .select_from(Incident)
+            .where(_live_incident())
         ).one()
     )
 

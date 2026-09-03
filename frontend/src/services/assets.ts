@@ -30,6 +30,7 @@ export type AssetErrorKind =
   | "unreachable"
   | "unauthorized"
   | "not_found"
+  | "in_trash"
   | "validation"
   | "rate_limited"
   | "unexpected";
@@ -116,6 +117,7 @@ function parseFieldErrors(body: unknown): AssetFieldErrors {
 function errorFor(status: number, body: unknown): AssetError {
   if (status === 401 || status === 403) return { kind: "unauthorized" };
   if (status === 404) return { kind: "not_found" };
+  if (status === 410) return { kind: "in_trash" }; // soft-deleted - see /trash
   if (status === 422) return { kind: "validation", fields: parseFieldErrors(body) };
   if (status === 429) return { kind: "rate_limited" };
   return { kind: "unexpected" };
@@ -202,3 +204,13 @@ async function lifecycle(
 
 export const deactivateAsset = (id: string) => lifecycle(id, "deactivate");
 export const reactivateAsset = (id: string) => lifecycle(id, "reactivate");
+
+/** Move an asset to Trash (soft delete). Recoverable from `/trash`. */
+export async function deleteAsset(id: string): Promise<AssetResult<null>> {
+  const res = await request(`${ASSETS_ENDPOINT}/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (res === null) return { ok: false, error: { kind: "unreachable" } };
+  if (res.status === 200) return { ok: true, data: null };
+  return { ok: false, error: errorFor(res.status, res.body) };
+}

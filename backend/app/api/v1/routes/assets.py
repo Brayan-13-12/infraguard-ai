@@ -6,11 +6,16 @@
 * ``PATCH  /api/v1/assets/{id}``            - partial update (content only)
 * ``POST   /api/v1/assets/{id}/deactivate`` - soft-deactivate (idempotent)
 * ``POST   /api/v1/assets/{id}/reactivate`` - reactivate (idempotent)
+* ``DELETE /api/v1/assets/{id}``            - move to Trash (soft delete, recoverable)
 
 Every endpoint requires an authenticated, active user (``get_current_user`` at
-the router level). State-changing methods additionally pass the CSRF
-origin check. There is **no destructive delete** in this milestone - an asset is
-deactivated and stays queryable with ``is_active=false``.
+the router level). State-changing methods additionally pass the CSRF origin
+check. ``DELETE`` is a **soft delete** - the row is stamped ``deleted_at`` /
+``deleted_by``, dropped from every normal query, and restorable from
+``/api/v1/trash``. There is no permanent purge (deferred to RBAC). Every normal
+read here rejects a trashed asset with ``410 Gone``.
+
+Future RBAC permission boundary: ``assets.delete``.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from app.api.request_context import get_audit_context
 from app.db.session import get_db
 from app.models.asset import Asset, AssetStatus, AssetType, Criticality, Environment
 from app.models.audit import AuditAction, AuditEntityType
+from app.models.user import User
 from app.schemas.asset import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
@@ -46,6 +52,7 @@ from app.services.assets import (
     update_asset,
 )
 from app.services.audit import AuditContext, FieldChange, diff_fields, record_event
+from app.services.trash import soft_delete_asset
 
 router = APIRouter(
     prefix="/assets",
@@ -54,6 +61,13 @@ router = APIRouter(
 )
 
 _NOT_FOUND = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+_IN_TRASH = HTTPException(
+    status_code=status.HTTP_410_GONE,
+    detail="This asset is in Trash. Restore it to make changes.",
+)
+_ALREADY_TRASHED = HTTPException(
+    status_code=status.HTTP_409_CONFLICT, detail="Asset is already in Trash"
+)
 
 # Fields whose change is worth recording in the audit log.
 _AUDITED_ASSET_FIELDS = (
@@ -70,9 +84,13 @@ _AUDITED_ASSET_FIELDS = (
 
 
 def _load(db: Session, asset_id: uuid.UUID):
+    """A live asset, or the right error: ``404`` if it never existed, ``410`` if
+    it is in Trash (normal endpoints do not act on trashed records)."""
     asset = get_asset(db, asset_id)
     if asset is None:
         raise _NOT_FOUND
+    if asset.deleted_at is not None:
+        raise _IN_TRASH
     return asset
 
 
@@ -228,6 +246,46 @@ def reactivate_asset_endpoint(
     ctx: AuditContext = Depends(get_audit_context),
 ) -> AssetRead:
     return _set_active_audited(db, ctx, _load(db, asset_id), is_active=True)
+
+
+@router.delete(
+    "/{asset_id}",
+    response_model=MessageResponse,
+    summary="Move an asset to Trash (soft delete, recoverable)",
+    responses={
+        404: {"model": MessageResponse},
+        409: {"model": MessageResponse, "description": "Already in Trash"},
+    },
+    dependencies=[Depends(require_trusted_origin)],
+)
+def delete_asset_endpoint(
+    asset_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    ctx: AuditContext = Depends(get_audit_context),
+) -> MessageResponse:
+    asset = get_asset(db, asset_id)
+    if asset is None:
+        raise _NOT_FOUND
+    if asset.deleted_at is not None:
+        raise _ALREADY_TRASHED
+
+    soft_delete_asset(db, asset, actor=current_user)
+    record_event(
+        db,
+        ctx=ctx,
+        action=AuditAction.DELETE,
+        entity_type=AuditEntityType.ASSET,
+        entity_id=asset.id,
+        entity_label=asset.name,
+        metadata={
+            "asset_type": asset.asset_type,
+            "environment": asset.environment,
+            "criticality": asset.criticality,
+        },
+    )
+    db.commit()
+    return MessageResponse(detail="Asset moved to Trash")
 
 
 def _set_active_audited(

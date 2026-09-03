@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
 import { AssetDetail } from "@/components/assets/AssetDetail";
 import { AssetDetailLoader } from "@/components/assets/AssetDetailLoader";
+import { InTrashNotice } from "@/components/trash/InTrashNotice";
 import { Button, buttonClasses } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Reveal } from "@/components/ui/Reveal";
@@ -15,6 +16,7 @@ import { useTranslation } from "@/i18n";
 /** Full-page asset detail - the deep-link / refresh fallback for the drawer. */
 export default function AssetDetailPage() {
   const { t } = useTranslation();
+  const router = useRouter();
   const { id } = useParams<{ id: string }>();
 
   return (
@@ -26,6 +28,13 @@ export default function AssetDetailPage() {
             <div className="flex justify-center py-20">
               <Spinner decorative />
             </div>
+          );
+        }
+        if (state.kind === "gone") {
+          return (
+            <Reveal>
+              <InTrashNotice kind="assets" />
+            </Reveal>
           );
         }
         if (state.kind === "notfound" || state.kind === "error") {
@@ -60,7 +69,11 @@ export default function AssetDetailPage() {
         }
         return (
           <Reveal>
-            <AssetDetail asset={state.asset} onChanged={setAsset} />
+            <AssetDetail
+              asset={state.asset}
+              onChanged={setAsset}
+              onDeleted={() => router.push("/assets")}
+            />
           </Reveal>
         );
       }}

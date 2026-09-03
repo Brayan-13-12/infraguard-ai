@@ -36,6 +36,8 @@ export const FILTERABLE_AUDIT_ACTIONS: readonly AuditAction[] = [
   "RELATION_CHANGED",
   "RESOLVED",
   "REOPENED",
+  "DELETE",
+  "RESTORE",
   "LOGIN",
   "LOGOUT",
 ];

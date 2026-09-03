@@ -8,6 +8,7 @@ import type { Asset } from "@/types/asset";
 export type AssetLoadState =
   | { kind: "loading" }
   | { kind: "notfound" }
+  | { kind: "gone" } // soft-deleted - it lives in Trash now
   | { kind: "error" }
   | { kind: "ready"; asset: Asset };
 
@@ -36,8 +37,15 @@ export function AssetDetailLoader({
     setState({ kind: "loading" });
     void getAsset(id).then((result) => {
       if (cancelled) return;
-      if (result.ok) setState({ kind: "ready", asset: result.data });
-      else setState({ kind: result.error.kind === "not_found" ? "notfound" : "error" });
+      if (result.ok) {
+        setState({ kind: "ready", asset: result.data });
+      } else if (result.error.kind === "not_found") {
+        setState({ kind: "notfound" });
+      } else if (result.error.kind === "in_trash") {
+        setState({ kind: "gone" });
+      } else {
+        setState({ kind: "error" });
+      }
     });
     return () => {
       cancelled = true;

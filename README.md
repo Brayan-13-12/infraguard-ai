@@ -204,26 +204,65 @@ pnpm dev
 | `GET` | `/api/v1/assets/summary` | Aggregate counts (`total` `active` `inactive` + `by_criticality` / `by_status` / `by_environment` / `by_type`, every catalog key present) → `200` (auth) |
 | `POST` | `/api/v1/assets` | Create an asset → `201` · `422` (auth) |
 | `GET` | `/api/v1/assets/{id}` | Asset detail → `200` · `404` (auth) |
-| `PATCH` | `/api/v1/assets/{id}` | Partial content update → `200` · `404` · `422` (auth) |
+| `PATCH` | `/api/v1/assets/{id}` | Partial content update → `200` · `404` · `410` (in Trash) · `422` (auth) |
 | `POST` | `/api/v1/assets/{id}/deactivate` · `/reactivate` | Soft lifecycle toggle → `200` · `404` (auth) |
+| `DELETE` | `/api/v1/assets/{id}` | Move to Trash (soft delete) → `200` · `404` · `409` (already trashed) (auth + CSRF) |
 | `GET` | `/api/v1/incidents` | List incidents - `page` `page_size` `q` `severity`\* `status`\* `priority`\* `asset_id` `started_from` `started_to` `sort` → `200` (auth) |
 | `GET` | `/api/v1/incidents/summary` | Aggregate counts (`open` `critical_open` `investigating` `monitoring` `resolved_recently` + `by_severity` / `by_status`) → `200` (auth) |
 | `POST` | `/api/v1/incidents` | Create an incident (+ `CREATED` / `ASSET_ADDED` timeline) → `201` · `422` (auth + CSRF) |
-| `GET` | `/api/v1/incidents/{id}` | Incident detail: metadata + affected assets + timeline → `200` · `404` (auth) |
-| `PATCH` | `/api/v1/incidents/{id}` | Partial update; timeline event per change; `asset_ids` replaces the set → `200` · `404` · `422` (auth + CSRF) |
+| `GET` | `/api/v1/incidents/{id}` | Incident detail: metadata + affected assets + timeline → `200` · `404` · `410` (in Trash) (auth) |
+| `PATCH` | `/api/v1/incidents/{id}` | Partial update; timeline event per change; `asset_ids` replaces the set → `200` · `404` · `410` · `422` (auth + CSRF) |
 | `POST` | `/api/v1/incidents/{id}/resolve` · `/reopen` | Lifecycle → `200` · `404` (auth + CSRF) |
 | `POST` | `/api/v1/incidents/{id}/comments` | Append a `COMMENT` timeline entry → `201` · `404` · `422` (auth + CSRF) |
+| `DELETE` | `/api/v1/incidents/{id}` | Move to Trash (soft delete; keeps timeline + affected-asset links) → `200` · `404` · `409` (auth + CSRF) |
 | `GET` | `/api/v1/audit` | List audit events (newest first) - `page` `page_size` `q` `action`\* `entity_type`\* `actor` `entity_id` `from` `to`; each row has `change_count` + a bounded `change_preview` → `200` (auth) |
 | `GET` | `/api/v1/audit/summary` | "Activity today" counters (`events_today` `changes_today` `logins_today` `active_actors_today`) → `200` (auth) |
 | `GET` | `/api/v1/audit/{id}` | One event: actor + entity + request context + field changes → `200` · `404` (auth) |
+| `GET` | `/api/v1/trash/summary` | Trashed-record counts (`assets` `incidents`) → `200` (auth) |
+| `GET` | `/api/v1/trash/assets` | List trashed assets - `page` (20, max 100) `q` `type` `criticality`\* `deleted_by` `from` `to` → `200` (auth) |
+| `GET` | `/api/v1/trash/assets/{id}` | Trashed asset detail (read-only, + deleter/`deleted_at`) → `200` · `404` (auth) |
+| `POST` | `/api/v1/trash/assets/{id}/restore` | Restore to the live module (same id) → `200` · `404` (auth + CSRF) |
+| `GET` | `/api/v1/trash/incidents` | List trashed incidents - `page` (15, max 100) `q` `severity`\* `status`\* `deleted_by` `from` `to` → `200` (auth) |
+| `GET` | `/api/v1/trash/incidents/{id}` | Trashed incident detail (read-only, + timeline + affected assets) → `200` · `404` (auth) |
+| `POST` | `/api/v1/trash/incidents/{id}/restore` | Restore to the live module (same id, history intact) → `200` · `404` (auth + CSRF) |
 | `GET` | `/docs` · `/openapi.json` | Swagger UI / OpenAPI schema |
 | `GET` | `/` | Service metadata |
 
-All `/api/v1/assets*`, `/api/v1/incidents*` and `/api/v1/audit*` endpoints
-require authentication (`get_current_user`); state-changing methods also pass the
-`Origin`/`Referer` CSRF check. There is no destructive delete - deactivated
-assets remain queryable with `is_active=false`. Incident `created_by` / timeline
-actor is always the authenticated user, never a request-body value.
+All `/api/v1/assets*`, `/api/v1/incidents*`, `/api/v1/audit*` and
+`/api/v1/trash*` endpoints require authentication (`get_current_user`);
+state-changing methods also pass the `Origin`/`Referer` CSRF check. There is **no
+permanent delete** - `DELETE` is a *soft delete* that sets `deleted_at` /
+`deleted_by` and moves the record to **Trash**, from where it is fully
+restorable. Incident `created_by` / timeline actor - and `deleted_by` - is always
+the authenticated user, never a request-body value.
+
+### Trash / soft delete (Governance Phase 2)
+
+`DELETE /assets/{id}` and `DELETE /incidents/{id}` set `deleted_at` (timestamptz,
+indexed) and `deleted_by` (FK `users.id`, `ON DELETE SET NULL`) — derived from
+the session, never from the payload. `deleted_at IS NULL` is the live state.
+
+- **Every normal query excludes trashed rows** — list, detail, both `/summary`
+  endpoints, dashboard counts, search/filters, the incident asset picker, and an
+  asset's related incidents. A trashed row is invisible to the operational app.
+- Hitting a **normal** route for a trashed record returns **`410 Gone`** (not
+  `404`) — the UI shows a small "this item is in Trash" notice with a link.
+- The dedicated **Trash API** (`/api/v1/trash/*`) is the only read path for
+  trashed rows: paginated lists with server-side filters, read-only detail, and
+  `POST …/restore` which clears `deleted_at` / `deleted_by` and returns the row
+  to the live module under the **same id**.
+- Soft-deleting an incident keeps its **timeline** and **affected-asset links**;
+  soft-deleting an asset keeps every `incident_assets` row, so incident history
+  never corrupts (the asset shows as *En papelera*). Deleting an incident never
+  touches an asset, and vice-versa.
+- Each soft delete emits an audit **`DELETE`** event and each restore an audit
+  **`RESTORE`** event, in the same transaction as the mutation (reusing the
+  Phase 1 audit log — there is no second audit system).
+- **No permanent purge** in this milestone — "empty Trash" / hard delete and the
+  permission boundaries below are deferred to the RBAC phase. The code keeps
+  those seams visible (`assets.delete`, `incidents.delete`, `trash.read`,
+  `trash.restore`, `trash.purge`); today every authenticated user may do all of
+  them.
 
 The **audit log** is a centralized, append-only record of governance-relevant
 actions (Asset / Incident `CREATE` · `UPDATE` with per-field `old → new` diffs ·
@@ -235,9 +274,11 @@ Values for sensitive field names (`password`, `token`, `jwt`, `cookie`, …) are
 never persisted; `LOGIN` / `LOGOUT` store the user id + email only. The
 per-incident **timeline** (`incident_events`) and the audit log are deliberately
 separate: the timeline is the operator narrative for one incident, the audit log
-is the cross-system governance record. Audit history is retained indefinitely (a
-retention policy, RBAC-gated access, and Trash are future Governance phases). All
-authenticated users can currently read the audit log.
+is the cross-system governance record. It also records **`DELETE`** (move to
+Trash) and **`RESTORE`** events — see *Trash / soft delete* below. Audit history
+is retained indefinitely and stays readable for records that are currently in
+Trash (a retention policy and RBAC-gated access are future Governance phases).
+All authenticated users can currently read the audit log.
 
 The **Incident ↔ Asset** relationship is a real many-to-many (`incident_assets`
 association table, not a JSON column); each incident carries a persisted
@@ -282,7 +323,10 @@ pnpm build
 ```
 
 **CI** (`.github/workflows/ci.yml`) runs all of the above on every PR, then
-builds the Compose stack and smoke-tests liveness, readiness and the frontend.
+builds the Compose stack and smoke-tests liveness, readiness, the auth / assets /
+incidents / audit APIs, the Trash + restore flow (delete → `410` on the normal
+route → found in Trash → restore → live again → audit has `DELETE` + `RESTORE`),
+and the frontend routes.
 
 ## Dependency & image reproducibility
 
@@ -507,10 +551,38 @@ milestone.
 - Not in scope: soft delete, Trash, RBAC, user-role admin, retention/pruning,
   failed-login telemetry
 
+**Governance & Administration - Phase 2 (Trash / Restore)**
+
+- `deleted_at` (timestamptz, partial index `WHERE deleted_at IS NOT NULL`) +
+  `deleted_by` (FK `users.id` `ON DELETE SET NULL`) on `assets` and `incidents`;
+  Alembic migration validated `upgrade → downgrade → upgrade` + `alembic check`
+- `DELETE /api/v1/assets/{id}` · `/incidents/{id}` → **soft delete** (actor from
+  the session, `409` if already trashed, audit `DELETE` in the same transaction).
+  Incident soft delete keeps its timeline + affected-asset links; asset soft
+  delete keeps every `incident_assets` row
+- **Every** live query excludes trashed rows (list, detail, both `/summary`,
+  dashboard, search/filters, asset picker, related incidents). Normal routes for
+  a trashed record return **`410 Gone`** (documented Option B — the UI shows an
+  "in Trash" notice with a link, not a bare 404)
+- Dedicated **Trash API** (`/api/v1/trash/*`): `summary`, paginated
+  server-filtered lists (assets 20 / incidents 15 per page, max 100, deleter
+  joined — **no N+1**), read-only detail, `POST …/restore` (clears the columns,
+  audit `RESTORE`, same id)
+- `Trash` is a new **active** nav item (English label; between Audit and AI
+  Assistant). `/trash` is a URL-backed tabbed recovery workspace (`?type=assets`
+  / `incidents`), compact summary strip (no KPI cards), route-aware read-only
+  detail workspaces at `/trash/{assets,incidents}/{id}`, Restore behind a
+  confirm. Neutral surfaces, subtle red for the deleted state, violet for restore
+- Audit timeline / detail now render `DELETE` (red) and `RESTORE` (violet)
+  events; audit history stays navigable for currently-trashed records
+- Not in scope (deferred to RBAC): **permanent purge** / empty Trash, the
+  `assets.delete` / `incidents.delete` / `trash.read` / `trash.restore` /
+  `trash.purge` permission checks (seams left visible), retention
+
 ### Planned (future phases)
 
-- Governance Phase 2+: soft delete + **Trash** (`DELETE` / `RESTORE`), **RBAC** /
-  roles (`ROLE_*` / `PERMISSION_CHANGED`), user-role administration, audit
+- Governance Phase 3+: **RBAC** / roles (`ROLE_*` / `PERMISSION_CHANGED`),
+  user-role administration, **permanent purge** of trashed records, audit
   **retention** policy
 - Authorization / RBAC / roles; refresh-token rotation; JWT revocation; password
   reset; email verification; OAuth; MFA

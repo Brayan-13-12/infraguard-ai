@@ -56,12 +56,14 @@ export function AssetEditDrawer({ id }: { id: string }) {
         >
           {state.kind === "loading" ? (
             <FormSkeleton />
-          ) : state.kind === "notfound" || state.kind === "error" ? (
+          ) : state.kind !== "ready" ? (
             <div className="flex flex-col items-center gap-3 py-10 text-center">
               <p className="text-sm font-medium text-foreground">
-                {state.kind === "notfound"
-                  ? t("assetDetail.notFoundTitle")
-                  : t("assetDetail.loadError")}
+                {state.kind === "error"
+                  ? t("assetDetail.loadError")
+                  : state.kind === "gone"
+                    ? t("assetDetail.inTrashTitle")
+                    : t("assetDetail.notFoundTitle")}
               </p>
               <div className="mt-1 flex gap-2">
                 {state.kind === "error" ? (

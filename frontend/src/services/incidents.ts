@@ -30,6 +30,7 @@ export type IncidentErrorKind =
   | "unreachable"
   | "unauthorized"
   | "not_found"
+  | "in_trash"
   | "validation"
   | "rate_limited"
   | "unexpected";
@@ -118,6 +119,7 @@ function parseFieldErrors(body: unknown): IncidentFieldErrors {
 function errorFor(status: number, body: unknown): IncidentError {
   if (status === 401 || status === 403) return { kind: "unauthorized" };
   if (status === 404) return { kind: "not_found" };
+  if (status === 410) return { kind: "in_trash" }; // soft-deleted - see /trash
   if (status === 422) return { kind: "validation", fields: parseFieldErrors(body) };
   if (status === 429) return { kind: "rate_limited" };
   return { kind: "unexpected" };
@@ -210,3 +212,13 @@ async function lifecycle(
 
 export const resolveIncident = (id: string) => lifecycle(id, "resolve");
 export const reopenIncident = (id: string) => lifecycle(id, "reopen");
+
+/** Move an incident to Trash (soft delete). Timeline + relationships preserved. */
+export async function deleteIncident(id: string): Promise<IncidentResult<null>> {
+  const res = await request(`${INCIDENTS_ENDPOINT}/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (res === null) return { ok: false, error: { kind: "unreachable" } };
+  if (res.status === 200) return { ok: true, data: null };
+  return { ok: false, error: errorFor(res.status, res.body) };
+}

@@ -51,7 +51,42 @@ describe("AuditEventHeader", () => {
   });
 });
 
+describe("AuditEventHeader — DELETE / RESTORE", () => {
+  it("renders a DELETE event with the red trash icon and 'Activo eliminado'", () => {
+    render(
+      <LanguageProvider>
+        <AuditEventHeader event={{ ...base, action: "DELETE" }} />
+      </LanguageProvider>,
+    );
+    expect(screen.getByRole("heading", { name: "Activo eliminado" })).toBeInTheDocument();
+    const icon = screen.getByRole("img", { name: "Eliminación" });
+    expect(icon.className).toContain("text-audit-delete");
+  });
+
+  it("renders a RESTORE event with the violet restore icon and 'Incidente restaurado'", () => {
+    render(
+      <LanguageProvider>
+        <AuditEventHeader
+          event={{ ...base, action: "RESTORE", entity_type: "Incident", entity_label: "API down" }}
+        />
+      </LanguageProvider>,
+    );
+    expect(screen.getByRole("heading", { name: "Incidente restaurado" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Restauración" }).className).toContain(
+      "text-audit-restore",
+    );
+  });
+});
+
 describe("AuditDetailContent", () => {
+  it("keeps the entity link on a DELETE event so trashed history stays navigable", () => {
+    renderDetail({ ...base, action: "DELETE", changes: [] });
+    expect(screen.getByRole("link", { name: /ver activo/i })).toHaveAttribute(
+      "href",
+      "/assets/a1",
+    );
+  });
+
   it("renders each field change as before -> after", () => {
     renderDetail(base);
     expect(screen.getByRole("heading", { name: "Cambios" })).toBeInTheDocument();
