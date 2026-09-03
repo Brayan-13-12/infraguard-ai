@@ -14,6 +14,19 @@ from tests.dbguard import (
 _PREFIX = "postgresql+psycopg://u:p@localhost:5432/"
 
 
+@pytest.fixture(autouse=True)
+def _opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Most cases assume the operator has opted in; the dedicated test below
+    checks the opt-in requirement itself."""
+    monkeypatch.setenv("INFRAGUARD_DISPOSABLE_DB", "1")
+
+
+def test_requires_the_disposable_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("INFRAGUARD_DISPOSABLE_DB", raising=False)
+    with pytest.raises(UnsafeTestDatabase, match="INFRAGUARD_DISPOSABLE_DB"):
+        assert_test_database(_PREFIX + "infraguard_test")
+
+
 @pytest.mark.parametrize("name", ["infraguard_test", "test", "ci_test", "app_int_test", "X_TEST"])
 def test_accepts_clear_test_database_names(name: str) -> None:
     assert assert_test_database(_PREFIX + name) == name

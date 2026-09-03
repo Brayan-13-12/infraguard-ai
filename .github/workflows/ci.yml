@@ -1,9 +1,10 @@
 name: CI
 
 # Validation for InfraGuard AI: lint + unit/integration tests for both apps, and
-# a Docker Compose build + migration + smoke test (health, authentication, the
-# assets API and the incidents API incl. their /summary endpoints, the audit log,
-# and the Trash / restore soft-delete flow) of the documented delivery path.
+# a Docker Compose build + migration + explicit bootstrap-admin + smoke test
+# (health, authentication, the access-request approval flow, RBAC authorization,
+# the assets API and the incidents API incl. their /summary endpoints, the audit
+# log, and the Trash / restore soft-delete flow) of the documented delivery path.
 #
 # Out of scope (dedicated later phases): image publishing, deployment, Kubernetes,
 # security scanning, release automation.
@@ -42,6 +43,9 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       TEST_DATABASE_URL: postgresql+psycopg://infraguard:ci_test_only@localhost:5432/infraguard_test
+      # The suite runs destructive schema ops; this disposable ephemeral CI
+      # database is explicitly authorized for them (never a persistent volume).
+      INFRAGUARD_DISPOSABLE_DB: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -92,8 +96,18 @@ jobs:
           NEXT_PUBLIC_API_URL: http://localhost:8000
 
   docker-smoke:
-    name: Docker Compose (build + migrate + API smoke tests)
+    name: Docker Compose (build + migrate + bootstrap + API smoke tests)
     runs-on: ubuntu-latest
+    env:
+      # Explicit first-Administrator bootstrap (Governance Phase 3). Public
+      # registration never creates an Administrator - this is the only path.
+      BOOTSTRAP_ADMIN_EMAIL: ci-admin@example.com
+      BOOTSTRAP_ADMIN_PASSWORD: a-ci-only-passphrase
+      # The smoke steps run back-to-back and legitimately perform dozens of auth
+      # calls from one Docker-gateway IP. Raise the best-effort in-process rate
+      # limit so it does not false-positive (the product default stays 10/60s;
+      # brute-force protection itself is covered by `test_login_is_rate_limited`).
+      AUTH_RATE_LIMIT_MAX_ATTEMPTS: "500"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -118,27 +132,125 @@ jobs:
       - name: Apply database migrations
         run: docker compose run --rm migrate
 
+      - name: Bootstrap the first Administrator (explicit + idempotent)
+        run: |
+          set -euo pipefail
+          docker compose run --rm bootstrap
+          # Running it again must be a safe no-op (no duplicate, no password reset).
+          docker compose run --rm bootstrap
+
       - name: Verify backend readiness (expect 200)
         run: |
           code=$(curl -s -o /tmp/ready.json -w '%{http_code}' http://localhost:8000/api/v1/health/ready)
           cat /tmp/ready.json; echo
           test "$code" = "200"
 
+      - name: Access-request + RBAC authorization smoke test
+        run: |
+          set -euo pipefail
+          API=http://localhost:8000/api/v1
+          ORIGIN='Origin: http://localhost:3000'
+          CT='Content-Type: application/json'
+          ADMIN=/tmp/rbac-admin.txt
+          VIEWER=/tmp/rbac-viewer.txt
+          PW='a-ci-only-passphrase'
+
+          echo "the bootstrapped Administrator can log in (never registered)"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -c "$ADMIN" -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-admin@example.com\",\"password\":\"$PW\"}" "$API/auth/login")" = "200"
+          curl -s -b "$ADMIN" "$API/auth/me" | python3 -c "import sys,json; d=json.load(sys.stdin); assert [r['slug'] for r in d['roles']]==['administrator'], d['roles']; assert len(d['permissions'])==16, d['permissions']; assert d['account_status']=='active'"
+
+          echo "public registration creates a PENDING access request (no roles, no access)"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-request@example.com\",\"password\":\"$PW\"}" "$API/auth/register")" = "201"
+
+          echo "a pending account cannot log in -> 403 account_pending"
+          code=$(curl -s -o /tmp/pending.json -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-request@example.com\",\"password\":\"$PW\"}" "$API/auth/login")
+          test "$code" = "403"
+          python3 -c "import json; assert json.load(open('/tmp/pending.json'))['detail']['code']=='account_pending'"
+
+          echo "duplicate registration -> 409 (status-neutral), incl. different casing / whitespace"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-request@example.com\",\"password\":\"$PW\"}" "$API/auth/register")" = "409"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "{\"email\":\"  CI-Request@Example.com \",\"password\":\"$PW\"}" "$API/auth/register")" = "409"
+
+          echo "the request is listed under Administration -> Access Requests (no roles)"
+          REQ_ID=$(curl -s -b "$ADMIN" "$API/admin/access-requests" | python3 -c "import sys,json; it=[u for u in json.load(sys.stdin)['items'] if u['email']=='ci-request@example.com'][0]; assert it['account_status']=='pending'; assert it['roles']==[]; print(it['id'])")
+
+          echo "approving with zero roles is rejected (422)"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$ADMIN" -H "$ORIGIN" -H "$CT" -X POST -d '{"role_ids":[]}' "$API/admin/users/$REQ_ID/approve")" = "422"
+
+          VROLE=$(curl -s -b "$ADMIN" "$API/admin/roles" | python3 -c "import sys,json; print(next(r['id'] for r in json.load(sys.stdin)['items'] if r['slug']=='viewer'))")
+          echo "approve as Viewer -> account becomes ACTIVE and can log in with exactly the Viewer permissions"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$ADMIN" -H "$ORIGIN" -H "$CT" -X POST -d "{\"role_ids\":[\"$VROLE\"]}" "$API/admin/users/$REQ_ID/approve")" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -c "$VIEWER" -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-request@example.com\",\"password\":\"$PW\"}" "$API/auth/login")" = "200"
+          curl -s -b "$VIEWER" "$API/auth/me" | python3 -c "import sys,json; d=json.load(sys.stdin); assert sorted(d['permissions'])==['assets.read','incidents.read'], d['permissions']; assert d['account_status']=='active'"
+
+          echo "viewer: can read, cannot mutate (403, never 401)"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$VIEWER" "$API/assets")" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$VIEWER" -H "$ORIGIN" -H "$CT" -d '{"name":"nope","asset_type":"Server","environment":"Test","criticality":"Low","status":"Operational"}' "$API/assets")" = "403"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$VIEWER" "$API/audit")" = "403"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$VIEWER" "$API/admin/users")" = "403"
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$API/admin/users")" = "401"
+
+          echo "reject flow: a second request -> REJECTED -> login denied with account_rejected"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-reject@example.com\",\"password\":\"$PW\"}" "$API/auth/register")" = "201"
+          REJ_ID=$(curl -s -b "$ADMIN" "$API/admin/access-requests" | python3 -c "import sys,json; print([u for u in json.load(sys.stdin)['items'] if u['email']=='ci-reject@example.com'][0]['id'])")
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$ADMIN" -H "$ORIGIN" -X POST "$API/admin/users/$REJ_ID/reject")" = "200"
+          code=$(curl -s -o /tmp/rej.json -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-reject@example.com\",\"password\":\"$PW\"}" "$API/auth/login")
+          test "$code" = "403"
+          python3 -c "import json; assert json.load(open('/tmp/rej.json'))['detail']['code']=='account_rejected'"
+
+          echo "admin creates a custom role and grants it -> the affected action now succeeds"
+          RID=$(curl -s -b "$ADMIN" -H "$ORIGIN" -H "$CT" -d '{"name":"CI Auditor","permissions":["audit.read"]}' "$API/admin/roles" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$ADMIN" -H "$ORIGIN" -H "$CT" -X PUT -d "{\"role_ids\":[\"$VROLE\",\"$RID\"]}" "$API/admin/users/$REQ_ID/roles")" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$VIEWER" "$API/audit")" = "200"
+
+          echo "the last active Administrator cannot lock themselves out (409)"
+          AID=$(curl -s -b "$ADMIN" "$API/auth/me" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$ADMIN" -H "$ORIGIN" -H "$CT" -X PATCH -d '{"is_active":false}' "$API/admin/users/$AID")" = "409"
+
+          echo "disabling a user stops their protected requests and their next login (account_disabled)"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$ADMIN" -H "$ORIGIN" -H "$CT" -X PATCH -d '{"is_active":false}' "$API/admin/users/$REQ_ID")" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$VIEWER" "$API/assets")" = "403"
+          code=$(curl -s -o /tmp/dis.json -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-request@example.com\",\"password\":\"$PW\"}" "$API/auth/login")
+          test "$code" = "403"
+          python3 -c "import json; assert json.load(open('/tmp/dis.json'))['detail']['code']=='account_disabled'"
+
+          echo "administrative changes are in the audit log"
+          curl -s -b "$ADMIN" "$API/audit?entity_type=Role" | python3 -c "import sys,json; assert 'CREATE' in {e['action'] for e in json.load(sys.stdin)['items']}"
+          curl -s -b "$ADMIN" "$API/audit?entity_type=User" | python3 -c "import sys,json; a={e['action'] for e in json.load(sys.stdin)['items']}; assert {'CREATE','UPDATE','STATUS_CHANGED'} <= a, a"
+
+          echo "the four system roles are seeded and immutable"
+          curl -s -b "$ADMIN" "$API/admin/roles" | python3 -c "import sys,json; s={r['slug'] for r in json.load(sys.stdin)['items'] if r['is_system']}; assert {'administrator','operator','analyst','viewer'} <= s, s"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$ADMIN" -H "$ORIGIN" -X DELETE "$API/admin/roles/$VROLE")" = "409"
+
       - name: Authentication smoke test
         run: |
           set -euo pipefail
-          BASE=http://localhost:8000/api/v1/auth
+          API=http://localhost:8000/api/v1
+          BASE=$API/auth
           ORIGIN='Origin: http://localhost:3000'
           CT='Content-Type: application/json'
           JAR=/tmp/cookies.txt
+          ADMIN=/tmp/auth-admin.txt
+          PW='a-ci-only-passphrase'
           EMAIL="ci-$(date +%s)@example.com"
-          BODY="{\"email\":\"$EMAIL\",\"password\":\"a-ci-only-passphrase\"}"
+          BODY="{\"email\":\"$EMAIL\",\"password\":\"$PW\"}"
 
-          echo "register -> 201"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -c "$ADMIN" -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-admin@example.com\",\"password\":\"$PW\"}" "$BASE/login")" = "200"
+
+          echo "register -> 201 (an access request, not a session)"
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "$BODY" "$BASE/register")" = "201"
 
           echo "duplicate register -> 409"
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "$BODY" "$BASE/register")" = "409"
+
+          echo "login before approval -> 403 account_pending (no cookie)"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -H "$ORIGIN" -H "$CT" -d "$BODY" "$BASE/login")" = "403"
+          ! grep -q infraguard_access "$JAR" 2>/dev/null
+
+          echo "admin approves the request as Viewer"
+          VROLE=$(curl -s -b "$ADMIN" "$API/admin/roles" | python3 -c "import sys,json; print(next(r['id'] for r in json.load(sys.stdin)['items'] if r['slug']=='viewer'))")
+          ACCESS_REQUEST_USER_ID=$(curl -s -b "$ADMIN" "$API/admin/access-requests" | python3 -c "import sys,json; print([u for u in json.load(sys.stdin)['items'] if u['email']=='$EMAIL'][0]['id'])")
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$ADMIN" -H "$ORIGIN" -H "$CT" -X POST -d "{\"role_ids\":[\"$VROLE\"]}" "$API/admin/users/$ACCESS_REQUEST_USER_ID/approve")" = "200"
 
           echo "login -> 200 + cookie"
           test "$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -H "$ORIGIN" -H "$CT" -d "$BODY" "$BASE/login")" = "200"
@@ -166,10 +278,11 @@ jobs:
           ORIGIN='Origin: http://localhost:3000'
           CT='Content-Type: application/json'
           JAR=/tmp/asset-cookies.txt
-          EMAIL="assets-$(date +%s)@example.com"
+          # Re-use the bootstrapped Administrator (see the RBAC step); every
+          # operation below needs a permission a fresh Viewer would not have.
+          EMAIL="ci-admin@example.com"
           CREDS="{\"email\":\"$EMAIL\",\"password\":\"a-ci-only-passphrase\"}"
 
-          curl -s -o /dev/null -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/register"
           test "$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/login")" = "200"
 
           echo "unauthenticated list -> 401"
@@ -221,10 +334,11 @@ jobs:
           ORIGIN='Origin: http://localhost:3000'
           CT='Content-Type: application/json'
           JAR=/tmp/incident-cookies.txt
-          EMAIL="incidents-$(date +%s)@example.com"
+          # Re-use the bootstrapped Administrator (see the RBAC step); every
+          # operation below needs a permission a fresh Viewer would not have.
+          EMAIL="ci-admin@example.com"
           CREDS="{\"email\":\"$EMAIL\",\"password\":\"a-ci-only-passphrase\"}"
 
-          curl -s -o /dev/null -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/register"
           test "$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/login")" = "200"
 
           echo "unauthenticated list -> 401"
@@ -277,10 +391,11 @@ jobs:
           ORIGIN='Origin: http://localhost:3000'
           CT='Content-Type: application/json'
           JAR=/tmp/audit-cookies.txt
-          EMAIL="audit-$(date +%s)@example.com"
+          # Re-use the bootstrapped Administrator (see the RBAC step); every
+          # operation below needs a permission a fresh Viewer would not have.
+          EMAIL="ci-admin@example.com"
           CREDS="{\"email\":\"$EMAIL\",\"password\":\"a-ci-only-passphrase\"}"
 
-          curl -s -o /dev/null -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/register"
           test "$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/login")" = "200"
 
           echo "unauthenticated audit list -> 401"
@@ -322,10 +437,11 @@ jobs:
           ORIGIN='Origin: http://localhost:3000'
           CT='Content-Type: application/json'
           JAR=/tmp/trash-cookies.txt
-          EMAIL="trash-$(date +%s)@example.com"
+          # Re-use the bootstrapped Administrator (see the RBAC step); every
+          # operation below needs a permission a fresh Viewer would not have.
+          EMAIL="ci-admin@example.com"
           CREDS="{\"email\":\"$EMAIL\",\"password\":\"a-ci-only-passphrase\"}"
 
-          curl -s -o /dev/null -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/register"
           test "$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/login")" = "200"
 
           echo "unauthenticated trash list -> 401"
@@ -366,6 +482,38 @@ jobs:
           echo "audit trail carries DELETE + RESTORE for the asset"
           curl -s -b "$JAR" "$API/audit?entity_id=$ID" | python3 -c "import sys,json; acts={e['action'] for e in json.load(sys.stdin)['items']}; assert {'CREATE','DELETE','RESTORE'} <= acts, acts"
 
+      # Runs LAST so the curated dataset never perturbs the precise assertions
+      # above. This is a throwaway CI database, not the developer's volume.
+      - name: Demo data seed smoke test (idempotent)
+        run: |
+          set -euo pipefail
+          API=http://localhost:8000/api/v1
+          ORIGIN='Origin: http://localhost:3000'
+          CT='Content-Type: application/json'
+          JAR=/tmp/seed-cookies.txt
+          CREDS='{"email":"ci-admin@example.com","password":"a-ci-only-passphrase"}'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/login")" = "200"
+
+          echo "first seed run -> creates the curated dataset"
+          docker compose run --rm seed-demo | tee /tmp/seed1.txt
+          grep -Eq 'created: +[6-9][0-9]' /tmp/seed1.txt   # ~60-80 assets created
+
+          A1=$(curl -s -b "$JAR" "$API/assets?page=1&page_size=1" | python3 -c "import sys,json;print(json.load(sys.stdin)['total'])")
+          I1=$(curl -s -b "$JAR" "$API/incidents?page=1&page_size=1" | python3 -c "import sys,json;print(json.load(sys.stdin)['total'])")
+          echo "assets(live)=$A1 incidents(live)=$I1"
+          test "$A1" -gt 20 && test "$I1" -gt 15   # both modules need multiple pages
+          curl -s -b "$JAR" "$API/assets/summary" | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['by_criticality']['Critical']>0;assert sum(1 for v in d['by_environment'].values() if v)>=3"
+          curl -s -b "$JAR" "$API/incidents/summary" | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['open']>0;assert d['critical_open']>0"
+          curl -s -b "$JAR" "$API/trash/summary" | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['assets']>=3;assert d['incidents']>=2"
+          curl -s -b "$JAR" "$API/admin/access-requests" | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['total']>=3"
+
+          echo "second seed run -> no duplicates, counts unchanged"
+          docker compose run --rm seed-demo | tee /tmp/seed2.txt
+          grep -q 'created: *0' /tmp/seed2.txt
+          A2=$(curl -s -b "$JAR" "$API/assets?page=1&page_size=1" | python3 -c "import sys,json;print(json.load(sys.stdin)['total'])")
+          I2=$(curl -s -b "$JAR" "$API/incidents?page=1&page_size=1" | python3 -c "import sys,json;print(json.load(sys.stdin)['total'])")
+          test "$A1" = "$A2" && test "$I1" = "$I2"
+
       - name: Verify frontend (expect exactly 200)
         run: |
           for _ in $(seq 1 30); do
@@ -380,6 +528,8 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/audit)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/trash)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' 'http://localhost:3000/trash?type=incidents')" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/admin)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' 'http://localhost:3000/admin?tab=roles')" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/dashboard)" = "200"
 
       - name: Dump logs on failure

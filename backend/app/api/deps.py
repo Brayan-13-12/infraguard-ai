@@ -1,8 +1,12 @@
 """Shared FastAPI dependencies for the API layer.
 
-* ``get_current_user``     - authenticate a request (cookie or Bearer header)
+* ``get_current_user``       - authenticate a request (cookie or Bearer header)
+* ``get_current_permissions`` - the caller's effective RBAC permissions (cached
+  per request)
+* ``require_permission`` / ``require_any_permission`` - authorization guards
+  (403 when the caller lacks the capability - never 401)
 * ``require_trusted_origin`` - CSRF defense for cookie-authenticated unsafe methods
-* ``auth_rate_limiter``    - best-effort in-process brute-force protection
+* ``auth_rate_limiter``      - best-effort in-process brute-force protection
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from app.core.ratelimit import RateLimiter
 from app.core.security import TokenError, decode_access_token
 from app.db.session import get_db
 from app.models.user import User
+from app.services.rbac import resolve_effective_permissions
 from app.services.users import get_by_id
 
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -128,8 +133,67 @@ def get_current_user(
     if user is None:
         raise _CREDENTIALS_EXCEPTION
     if not user.is_active:
+        # The token is cryptographically valid but the account is no longer
+        # ``active`` - an administrator disabled it after the token was issued
+        # (``pending`` / ``rejected`` accounts never get a token). 403, not 401:
+        # the credentials are valid, the account is not. The frontend clears its
+        # session and shows the matching message.
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is inactive",
+            detail={
+                "code": "account_disabled",
+                "message": "Your account has been disabled. Contact an administrator.",
+            },
         )
     return user
+
+
+def get_current_permissions(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> frozenset[str]:
+    """The caller's **effective permissions** - the union across every assigned
+    role. Resolved once per request and cached on ``request.state`` so multiple
+    guards on one endpoint (and ``/auth/me``) share a single query."""
+    cached = getattr(request.state, "effective_permissions", None)
+    if cached is not None:
+        return cached
+    perms = resolve_effective_permissions(db, user.id)
+    request.state.effective_permissions = perms
+    return perms
+
+
+def _forbidden() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have permission to perform this action.",
+    )
+
+
+def require_permission(code: str) -> Callable[..., None]:
+    """Dependency factory: allow the request only if the caller holds ``code``.
+
+    Ordering guarantees: ``get_current_user`` runs first (401 for an
+    unauthenticated / disabled caller), then this returns **403** when the
+    permission is absent. Authorization logic lives here, once - never inline in
+    a route body.
+    """
+
+    def _dependency(perms: frozenset[str] = Depends(get_current_permissions)) -> None:
+        if code not in perms:
+            raise _forbidden()
+
+    return _dependency
+
+
+def require_any_permission(*codes: str) -> Callable[..., None]:
+    """Dependency factory: allow the request if the caller holds **any** of
+    ``codes`` (used where one screen aggregates several capabilities)."""
+    wanted = frozenset(codes)
+
+    def _dependency(perms: frozenset[str] = Depends(get_current_permissions)) -> None:
+        if wanted.isdisjoint(perms):
+            raise _forbidden()
+
+    return _dependency

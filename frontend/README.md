@@ -34,7 +34,11 @@ src/
 │   ├── trash/            TrashBrowser · TrashAssetsList · TrashIncidentsList ·
 │   │                     TrashDetailWorkspace · TrashAssetDetail · TrashIncidentDetail ·
 │   │                     TrashDetailLoader · RestoreAction · InTrashNotice · TrashListSkeleton · catalog
-│   ├── theme/ · auth/ · dashboard/
+│   ├── admin/            AdminBrowser · UsersList · RolesList · UserDetail · RoleDetail ·
+│   │                     AdminDetailWorkspace · AdminDetailPage · AdminDetailLoader ·
+│   │                     PermissionMatrix · RoleSelectDialog · RoleFormDialog · catalog
+│   ├── auth/             Forbidden · RequirePermission
+│   ├── theme/ · dashboard/
 │   ├── shell/            AppShell · AuthenticatedShell · Sidebar · SidebarFooter ·
 │   │                     Topbar · MobileNav · NavList · LogoutButton
 │   ├── assets/           AssetsBrowser · AssetsTable · AssetFilters ·
@@ -45,7 +49,7 @@ src/
 │   │   ui/               Tabs · DetailRow · FieldEditDialog · WorkspaceDialog  (shared detail primitives)
 │   ├── AuthProvider · RequireAuth · AuthForm · AuthNav · Brand · SystemHealth
 ├── hooks/                useCloseDrawer
-├── i18n/ · lib/ (cn · config · … · navigation · motion · assetsRefresh) · services/ · types/
+├── i18n/ · lib/ (cn · config · navigation · permissions · motion · *Refresh) · services/ · types/ · test/ (fixtures · MockAuthProvider)
 ```
 
 ## Internationalisation (Spanish-only visible UI)
@@ -64,8 +68,9 @@ src/
   active-language → Spanish → the key itself.
 - **Fixed English** - product/module proper nouns: `InfraGuard AI`, the sidebar
   nav labels (`Dashboard`, `Assets`, `Incidents`, `Audit`, `Trash`,
-  `AI Assistant`, `Settings`), the `Dashboard` / `Audit` / `Trash` page headings,
-  and the `Coming soon` / `soon` marker. Proper
+  `Administration`, `AI Assistant`, `Settings`), the `Dashboard` / `Audit` /
+  `Trash` / `Administration` page headings, permission **codes** (`assets.read`
+  …), and the `Coming soon` / `soon` marker. Proper
   nouns ("PostgreSQL", "Argon2id", "HttpOnly") and user data (emails, UUIDs) are
   never translated.
 
@@ -186,7 +191,11 @@ The **rail** (`Sidebar`, `--sidebar` tokens) is a flex column: brand + footer
 non-sensitive); collapsed shows icons only with hover/focus tooltips and the
 label as the accessible name. Navigation (`src/lib/navigation.ts` → `NAV_ITEMS`)
 is a **single flat list** - Dashboard, Assets, Incidents, Audit, Trash,
-AI Assistant, Settings, **no section headings**. The active item gets a primary-tinted fill, primary
+Administration, AI Assistant, Settings, **no section headings**. Items carrying a
+`permission` (`assets.read`, `audit.read`, `trash.read`, the admin permissions
+for `Administration`, …) are filtered out by `visibleNavItems` for users whose
+roles do not grant them - the caller only sees the modules they can open. The
+active item gets a primary-tinted fill, primary
 text/icon and a left accent bar (`aria-current="page"`); future items are
 `aria-disabled`, not links, with a quiet lock marker and a "Próximamente"
 tooltip. The footer: a compact identity row (avatar + email + theme toggle) over
@@ -483,6 +492,100 @@ interceptors only ever receive a real id - no `new` / `edit` dispatch needed.
 - **Permanent purge is not implemented** (deferred to RBAC); the UI never offers
   "Eliminar definitivamente".
 
+## RBAC & Administration (governance & administration - Phase 3)
+
+**Frontend visibility is not security.** The UI mirrors what the backend already
+allows; every guarded call is enforced server-side.
+
+### Permission awareness
+
+`GET /auth/me` now returns `roles` + `permissions`. `AuthProvider` exposes
+`can(code)` / `canAny(codes)` / `canAll(codes)` (and the `usePermission` /
+`usePermissions` hooks) - **one source of truth**. Components check *permissions*,
+never role names. `src/lib/permissions.ts` holds the 16-code union type + the
+`hasPermission` helpers; `src/lib/navigation.ts` filters the sidebar.
+
+- **401 vs 403** - `services/*` map `403` → a `forbidden` error kind, distinct
+  from `401` (`unauthorized`). A `403` never redirects to `/login`.
+- **`<RequirePermission>`** wraps each module page (`/assets`, `/incidents`,
+  `/audit`, `/trash`, `/admin`) and renders **`<Forbidden>`** - *"No tienes
+  permiso para acceder a esta sección."* + *"Volver al Dashboard"* - for a direct
+  visit without the permission. Not an error, not a sign-in prompt.
+- **Action affordances** - "New asset / incident", inline edit pencils, lifecycle
+  buttons, Resolve / Reopen, Move to Trash, Restore all hide without the matching
+  permission. **Dashboard** never calls a summary endpoint the caller can't read.
+- **Non-active account** - `login` / `fetchMe` parse the `403 {detail:{code}}`
+  into `account_pending` / `account_rejected` / `account_disabled` failure kinds;
+  the provider keeps no session and the form shows the matching Spanish message
+  (*"Tu solicitud de acceso está pendiente de aprobación."* /
+  *"…no fue aprobada. Contacta a un administrador…"* /
+  *"Tu cuenta está deshabilitada…"*). A wrong password stays the generic
+  *"Correo electrónico o contraseña incorrectos."*
+
+### Registration = access request
+
+`POST /auth/register` no longer returns a session. `services/auth.register`
+resolves `{ account_status: "pending", detail }` on `201`; `/register` swaps to a
+success panel (**"Solicitud enviada"** / *"Un administrador revisará tu solicitud
+de acceso…"* / *"Podrás iniciar sesión cuando tu cuenta sea aprobada."* /
+**"Volver a iniciar sesión"**) - no auto-sign-in, no redirect to the dashboard.
+The duplicate-email `409` stays a status-neutral *"Ese correo electrónico ya está
+registrado."*
+
+### `/admin` module
+
+A sixth **active** nav item, **`Administration`** (English, between `Trash` and
+the disabled `AI Assistant`), permission-gated on
+`users.read | users.manage | roles.read | roles.manage`.
+
+```
+(app)/admin/
+  layout.tsx  → {children}{modal}
+  page.tsx    → RequirePermission → AdminBrowser (Suspense)
+  users/[id]/ · roles/[id]/            full-page detail fallbacks
+  @modal/(.)users/[id]/ · (.)roles/[id]/  route-aware workspaces
+```
+
+- **`AdminBrowser`** - header "Administration" + Spanish subtitle, a thin summary
+  strip (Users / Active / **Pending** / Roles / Custom), URL-backed **Users /
+  Access requests / Roles** tabs. The Access-requests tab carries a restrained
+  `(n)` pending count. Users: server-side search + 4-state `status` filter
+  (`active` / `pending` / `rejected` / `disabled`) + role filter, real pagination
+  (20). Access requests: pending registrations, newest first. Roles: every role
+  with `Sistema` / `Personalizado` badges + counts; "Nuevo rol" only with
+  `roles.manage`.
+- **User workspace** - identity, a **4-state account-status badge**
+  (`AccountStatusBadge`), role chips, the **effective permission** list (with a
+  *"pending / rejected / disabled → no access, roles or not"* caption for a
+  non-active account), Created / Updated / ID.
+  - For a `pending` / `rejected` request: **Aprobar solicitud** (opens
+    `ApproveRequestDialog`) and, for `pending`, **Rechazar solicitud** (a
+    `ConfirmDialog`; the request is kept, not deleted).
+  - Otherwise, with `users.manage`: **Activar / Deshabilitar** behind a
+    `ConfirmDialog`, **Gestionar roles**. A last-active-admin notice explains why
+    the destructive actions are refused; the `409` lockout message surfaces
+    inline without closing.
+- **Approve dialog** (`ApproveRequestDialog`) - a role checkbox list with a
+  **live effective-permission preview**; Viewer is pre-selected; the confirm
+  button is **disabled until ≥ 1 role** is picked (a zero-role approval is
+  impossible client- and server-side). Role selector (`RoleSelectDialog`) is the
+  same pattern for an already-provisioned user, with a danger-toned Save when
+  removing Administrator.
+- **Role workspace** - `Resumen` / `Permisos` / `Usuarios` tabs. System roles
+  show an immutable notice and no edit / delete. Custom roles: **Editar rol**
+  (`RoleFormDialog` - name + description + **`PermissionMatrix`**), **Eliminar
+  rol** (`ConfirmDialog`; a `409` in-use message when still assigned).
+- **`PermissionMatrix`** - grouped by domain (`Activos`, `Incidentes`, …); each
+  row a real checkbox + friendly label + the `assets.read`-style code as
+  secondary metadata. `readOnly` renders it as a static list (system roles, the
+  user "effective permissions" view).
+- `services/admin.ts` - typed `AdminResult<T>`, `credentials: "include"`, runtime
+  guards, `403` → `forbidden`, `409` → `conflict` with the server message.
+  `lib/adminRefresh.ts` tells the still-mounted lists to refetch after a
+  workspace mutation.
+
+Token lifetime is unchanged (absolute 30-minute session; no refresh tokens).
+
 ## Auth screen
 
 `<AuthLayout>` is an **enterprise split** at `lg+` (~55/45): a deep, branded
@@ -541,3 +644,19 @@ The **audit module** (`catalog` semantic-colour families incl. `DELETE` /
 item, and the **Move to Trash** flow on `AssetDetail` / `AssetDetailWorkspace` /
 `IncidentDetailWorkspace` (confirm → soft delete → toast → detail closes → list
 refresh) plus the `410` → `InTrashNotice` behaviour on the normal detail routes.
+
+The **RBAC layer**: `lib/permissions` (`hasPermission` / `hasAny` / `hasAll`,
+group membership), `services/admin` (query building, `403` → `forbidden`,
+`409` → `conflict`), `RequirePermission` / `Forbidden` (renders the 403 state,
+never the content, never a login prompt), the **Sidebar** filtering
+(permissioned modules hidden from a Viewer; `Administration` after `Trash`), the
+**gating** assertions on `AssetsBrowser` / `IncidentsBrowser` ("New" hidden
+without `*.create`) and `AssetDetail` (every mutating affordance hidden from a
+Viewer), and the **Administration module**: `AdminBrowser` (header / summary /
+tabs / user list + roles + status / status filter → query / system-vs-custom /
+"Nuevo rol" gated), `UserDetailContent` (identity + effective-permission union /
+actions gated / deactivate confirm + toast / last-admin `409` inline /
+role-selector open), `RoleDetailContent` (custom vs system / immutable notice /
+delete confirm + `409`-in-use), and `PermissionMatrix` (grouping / selection /
+readOnly). Existing component tests wrap in a synchronous `MockAuthProvider`
+(default Administrator; `VIEWER_USER` to scope).

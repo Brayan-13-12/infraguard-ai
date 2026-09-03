@@ -124,6 +124,15 @@ class Settings(BaseSettings):
     AUTH_RATE_LIMIT_MAX_ATTEMPTS: int = Field(default=10, gt=0)
     AUTH_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60, gt=0)
 
+    # --- Bootstrap Administrator (Governance Phase 3) ---
+    # Credentials for the explicit `python -m app.scripts.bootstrap_admin` command
+    # (and the `bootstrap` compose one-shot). Used ONLY by that command - never on
+    # startup, never in a request path. The command creates the account only if
+    # absent, marks it `active`, grants Administrator, and NEVER resets an
+    # existing password. Leave unset to disable the command.
+    BOOTSTRAP_ADMIN_EMAIL: str | None = None
+    BOOTSTRAP_ADMIN_PASSWORD: str | None = None
+
     # --- CORS ---
     # Comma-separated string (from env) or list. Defaults to the local frontend
     # only. `NoDecode` disables pydantic-settings' JSON parsing so the validator

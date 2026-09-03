@@ -4,6 +4,26 @@
 #   cp .env.example .env
 #   docker compose up --build -d
 #   docker compose run --rm migrate       # apply DB migrations (creates `users`)
+#   docker compose run --rm bootstrap     # create the first Administrator
+#                                         # (set BOOTSTRAP_ADMIN_* in .env first)
+#   docker compose run --rm seed-demo     # load the curated demo dataset (idempotent)
+#
+# ---------------------------------------------------------------------------
+# DATABASE SAFETY - read before touching volumes
+# ---------------------------------------------------------------------------
+#   `infraguard-ai_pgdata` is PERSISTENT development data. Treat it as user-owned.
+#
+#   SAFE:      docker compose down            (stops/removes containers, keeps data)
+#              docker compose stop
+#   FORBIDDEN: docker compose down -v         (DESTROYS pgdata - never for dev)
+#              docker volume rm infraguard-ai_pgdata
+#              docker volume prune / docker system prune --volumes
+#
+#   Regenerate demo data with `docker compose run --rm seed-demo` - NEVER by
+#   resetting PostgreSQL. Destructive migration / integration testing uses the
+#   throwaway `db-test` service (separate `pgdata_test` volume), never `db`:
+#
+#     docker compose --profile test up -d db-test
 #
 # Endpoints:
 #   Frontend  -> http://localhost:3000       (/login, /register, /dashboard)
@@ -46,6 +66,16 @@ x-backend-env: &backend-env
   # Fallback kept in step with the backend config default (app/core/config.py).
   JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-30}
   AUTH_COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-lax}
+  # Best-effort in-process auth rate limit. Defaults match app/core/config.py
+  # (10 attempts / 60s). CI's sequential smoke suite makes a burst of *legitimate*
+  # logins from a single Docker-gateway IP, so it raises the ceiling via env.
+  AUTH_RATE_LIMIT_MAX_ATTEMPTS: ${AUTH_RATE_LIMIT_MAX_ATTEMPTS:-10}
+  AUTH_RATE_LIMIT_WINDOW_SECONDS: ${AUTH_RATE_LIMIT_WINDOW_SECONDS:-60}
+  # --- Bootstrap Administrator (Governance Phase 3) ---
+  # Consumed only by the one-shot `bootstrap` job below. Public registration
+  # never creates an Administrator; this is the sole deterministic path.
+  BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+  BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
 
 services:
   db:
@@ -102,6 +132,92 @@ services:
     networks:
       - data
 
+  # One-shot: create (or promote) the bootstrap Administrator, then exit.
+  # Idempotent - safe to run repeatedly; never resets an existing password.
+  # Requires BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD in `.env`.
+  #   docker compose run --rm bootstrap
+  bootstrap:
+    <<: *hardening
+    build:
+      context: ./backend
+    profiles: ["bootstrap"]
+    restart: "no"
+    command: ["python", "-m", "app.scripts.bootstrap_admin"]
+    environment: *backend-env
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - data
+
+  # One-shot: INSERT the curated InfraGuard AI demo dataset into the normal
+  # development database, then exit. Idempotent and strictly additive - it never
+  # drops / truncates / resets anything and never touches user-created records,
+  # users, passwords, roles or audit history. Regenerate demo data with THIS,
+  # never by recreating PostgreSQL.
+  #   docker compose run --rm seed-demo
+  seed-demo:
+    <<: *hardening
+    build:
+      context: ./backend
+    profiles: ["seed-demo"]
+    restart: "no"
+    command: ["python", "-m", "app.scripts.seed_demo"]
+    environment: *backend-env
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - data
+
+  # Throwaway PostgreSQL for destructive integration tests / migration
+  # validation. SEPARATE volume (`pgdata_test`) and host port - it is never the
+  # main `db`. `docker compose --profile test down -v` is safe here.
+  #   docker compose --profile test up -d db-test
+  db-test:
+    <<: *hardening
+    image: postgres:17.2-alpine@sha256:7e5df973a74872482e320dcbdeb055e178d6f42de0558b083892c50cda833c96
+    profiles: ["test"]
+    environment:
+      POSTGRES_DB: infraguard_test
+      POSTGRES_USER: ${POSTGRES_USER:-infraguard}
+      POSTGRES_PASSWORD: ${POSTGRES_TEST_PASSWORD:-infraguard_test_only}
+    ports:
+      - "127.0.0.1:55433:5432"
+    volumes:
+      - pgdata_test:/var/lib/postgresql/data
+    tmpfs:
+      - /tmp
+      - /run/postgresql
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-infraguard} -d infraguard_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # A regular bridge (not the `internal` data net) so the host test runner can
+    # reach it on 127.0.0.1:55433.
+    networks:
+      - testnet
+
   backend:
     <<: *hardening
     build:
@@ -145,6 +261,8 @@ services:
 
 volumes:
   pgdata:
+  # Throwaway - only the `db-test` profile writes here. Safe to `down -v`.
+  pgdata_test:
 
 networks:
   edge:
@@ -153,3 +271,7 @@ networks:
     driver: bridge
     # No route to the outside world: PostgreSQL has no reason to reach the internet.
     internal: true
+  # Only the `test` profile's throwaway db-test uses this - a plain bridge so it
+  # can publish a host port for the local test runner.
+  testnet:
+    driver: bridge

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TrashBrowser } from "@/components/trash/TrashBrowser";
 import { LanguageProvider } from "@/i18n";
+import { MockAuthProvider } from "@/test/MockAuthProvider";
 import * as trashService from "@/services/trash";
 import type { TrashAssetPage, TrashIncidentPage, TrashSummary } from "@/types/trash";
 
@@ -68,7 +69,9 @@ const incidentPage = (over: Partial<TrashIncidentPage> = {}): TrashIncidentPage 
 function renderBrowser() {
   return render(
     <LanguageProvider>
+      <MockAuthProvider>
       <TrashBrowser />
+    </MockAuthProvider>
     </LanguageProvider>,
   );
 }

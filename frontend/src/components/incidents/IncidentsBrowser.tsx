@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useAuth } from "@/components/AuthProvider";
 import { Alert } from "@/components/ui/Alert";
 import { Button, buttonClasses } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -114,6 +115,7 @@ function activeKpiKey(filters: IncidentFilterState): IncidentKpiKey | null {
 
 export function IncidentsBrowser() {
   const { t } = useTranslation();
+  const canCreate = useAuth().can("incidents.create");
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -270,10 +272,12 @@ export function IncidentsBrowser() {
           title="Incidents"
           description={t("incidents.subtitle")}
           actions={
-            <Link href="/incidents/new" className={buttonClasses({ size: "sm" })}>
-              <PlusIcon />
-              {t("incidents.newIncident")}
-            </Link>
+            canCreate ? (
+              <Link href="/incidents/new" className={buttonClasses({ size: "sm" })}>
+                <PlusIcon />
+                {t("incidents.newIncident")}
+              </Link>
+            ) : undefined
           }
         />
       </Reveal>
@@ -403,12 +407,12 @@ export function IncidentsBrowser() {
               <Button variant="secondary" size="sm" onClick={resetAll}>
                 {t("filters.reset")}
               </Button>
-            ) : (
+            ) : canCreate ? (
               <Link href="/incidents/new" className={buttonClasses({ size: "sm" })}>
                 <PlusIcon />
                 {t("incidents.emptyCta")}
               </Link>
-            )
+            ) : undefined
           }
         />
       ) : (

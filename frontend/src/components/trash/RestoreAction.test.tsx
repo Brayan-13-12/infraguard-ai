@@ -5,14 +5,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RestoreAction } from "@/components/trash/RestoreAction";
 import { Toaster, clearToasts } from "@/components/ui/toast";
 import { LanguageProvider } from "@/i18n";
+import { MockAuthProvider } from "@/test/MockAuthProvider";
 import * as trashRefresh from "@/lib/trashRefresh";
 import * as trashService from "@/services/trash";
 
 function renderAction(kind: "assets" | "incidents", onRestored = vi.fn()) {
   render(
     <LanguageProvider>
+      <MockAuthProvider>
       <RestoreAction kind={kind} id="x1" label="prod-api-01" onRestored={onRestored} />
       <Toaster />
+    </MockAuthProvider>
     </LanguageProvider>,
   );
   return { onRestored };

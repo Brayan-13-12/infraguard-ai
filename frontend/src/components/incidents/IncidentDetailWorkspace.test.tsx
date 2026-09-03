@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IncidentDetailWorkspace } from "@/components/incidents/IncidentDetailWorkspace";
 import { Toaster, clearToasts } from "@/components/ui/toast";
 import { LanguageProvider } from "@/i18n";
+import { MockAuthProvider } from "@/test/MockAuthProvider";
 import { subscribeIncidentsChanged } from "@/lib/incidentsRefresh";
 import * as assetService from "@/services/assets";
 import * as incidentService from "@/services/incidents";
@@ -62,8 +63,10 @@ const DETAIL: IncidentDetail = {
 function renderWorkspace() {
   return render(
     <LanguageProvider>
+      <MockAuthProvider>
       <IncidentDetailWorkspace id="abc-123" />
       <Toaster />
+    </MockAuthProvider>
     </LanguageProvider>,
   );
 }

@@ -4,18 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "@/components/AuthProvider";
 import { RequireAuth } from "@/components/RequireAuth";
 import * as authService from "@/services/auth";
+import { makeUser } from "@/test/fixtures";
 
 const replace = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace, push: vi.fn() }),
 }));
 
-const USER = {
-  id: "u1",
-  email: "user@example.com",
-  is_active: true,
-  created_at: "2026-08-31T00:00:00Z",
-};
+const USER = makeUser({ id: "u1" });
 
 afterEach(() => {
   vi.restoreAllMocks();

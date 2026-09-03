@@ -20,6 +20,7 @@ import {
   SearchIcon,
 } from "@/components/ui/icons";
 import { Alert } from "@/components/ui/Alert";
+import { useAuth } from "@/components/AuthProvider";
 import { cn } from "@/lib/cn";
 import { useTranslation } from "@/i18n";
 import { ASSETS_PAGE_SIZE } from "@/lib/config";
@@ -65,6 +66,8 @@ type LoadState =
 
 export function AssetsBrowser() {
   const { t } = useTranslation();
+  const { can } = useAuth();
+  const canCreate = can("assets.create");
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -177,10 +180,12 @@ export function AssetsBrowser() {
           title="Assets"
           description={t("assets.subtitle")}
           actions={
-            <Link href="/assets/new" className={buttonClasses({ size: "sm" })}>
-              <PlusIcon />
-              {t("assets.newAsset")}
-            </Link>
+            canCreate ? (
+              <Link href="/assets/new" className={buttonClasses({ size: "sm" })}>
+                <PlusIcon />
+                {t("assets.newAsset")}
+              </Link>
+            ) : undefined
           }
         />
       </Reveal>
@@ -283,12 +288,12 @@ export function AssetsBrowser() {
               <Button variant="secondary" size="sm" onClick={resetAll}>
                 {t("filters.reset")}
               </Button>
-            ) : (
+            ) : canCreate ? (
               <Link href="/assets/new" className={buttonClasses({ size: "sm" })}>
                 <PlusIcon />
                 {t("assets.emptyCta")}
               </Link>
-            )
+            ) : undefined
           }
         />
       ) : (

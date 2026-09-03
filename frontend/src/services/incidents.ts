@@ -29,6 +29,7 @@ export type IncidentFieldErrors = Partial<Record<IncidentField, string>>;
 export type IncidentErrorKind =
   | "unreachable"
   | "unauthorized"
+  | "forbidden"
   | "not_found"
   | "in_trash"
   | "validation"
@@ -117,7 +118,8 @@ function parseFieldErrors(body: unknown): IncidentFieldErrors {
 }
 
 function errorFor(status: number, body: unknown): IncidentError {
-  if (status === 401 || status === 403) return { kind: "unauthorized" };
+  if (status === 401) return { kind: "unauthorized" };
+  if (status === 403) return { kind: "forbidden" };
   if (status === 404) return { kind: "not_found" };
   if (status === 410) return { kind: "in_trash" }; // soft-deleted - see /trash
   if (status === 422) return { kind: "validation", fields: parseFieldErrors(body) };

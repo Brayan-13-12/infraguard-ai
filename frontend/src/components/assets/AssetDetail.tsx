@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import { useAuth } from "@/components/AuthProvider";
 import { RelatedIncidents } from "@/components/incidents/RelatedIncidents";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
@@ -82,6 +83,7 @@ export function AssetLifecycleButton({
   size?: "sm" | "md";
 }) {
   const { t } = useTranslation();
+  const { can } = useAuth();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -106,6 +108,9 @@ export function AssetLifecycleButton({
       setError(t("assetDetail.actionError"));
     }
   }
+
+  // Lifecycle state is part of "editing" an asset - hidden without assets.update.
+  if (!can("assets.update")) return null;
 
   return (
     <>
@@ -154,6 +159,7 @@ export function MoveToTrashButton({
   size?: "sm" | "md";
 }) {
   const { t } = useTranslation();
+  const { can } = useAuth();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -173,6 +179,8 @@ export function MoveToTrashButton({
       setError(t("assetDetail.moveToTrashError"));
     }
   }
+
+  if (!can("assets.delete")) return null;
 
   return (
     <>
@@ -236,6 +244,8 @@ export function AssetDetailContent({
   onChanged: (asset: Asset) => void;
 }) {
   const { t, language } = useTranslation();
+  const { can } = useAuth();
+  const canEdit = can("assets.update");
   const locale = LANGUAGE_LOCALES[language];
   const idBase = useTabsId("asset-detail");
 
@@ -353,10 +363,10 @@ export function AssetDetailContent({
     return { ok: false, error: t("assetForm.errorGeneric") };
   }
 
-  const editRow = (field: AssetFieldKey) => ({
-    onEdit: () => setEditing(field),
-    editLabel: configs[field].title,
-  });
+  const editRow = (field: AssetFieldKey) =>
+    canEdit
+      ? { onEdit: () => setEditing(field), editLabel: configs[field].title }
+      : {};
 
   const activeCfg = editing ? configs[editing] : null;
 

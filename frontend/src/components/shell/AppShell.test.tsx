@@ -6,6 +6,7 @@ import { AppShell } from "@/components/shell/AppShell";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
 import { LanguageProvider } from "@/i18n";
 import * as authService from "@/services/auth";
+import { makeUser } from "@/test/fixtures";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard",
@@ -24,12 +25,7 @@ afterEach(() => vi.restoreAllMocks());
 function renderShell() {
   vi.spyOn(authService, "fetchMe").mockResolvedValue({
     ok: true,
-    data: {
-      id: "u1",
-      email: "user@example.com",
-      is_active: true,
-      created_at: "2026-08-31T00:00:00Z",
-    },
+    data: makeUser({ id: "u1" }),
   });
   return render(
     <ThemeProvider>

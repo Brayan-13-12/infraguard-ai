@@ -10,9 +10,9 @@ the same transaction as the mutation they describe. Application-level append-onl
 is not cryptographic immutability - a database administrator can still mutate
 rows directly.
 
-**Authorization (Phase 1):** every endpoint requires an authenticated, active
-user. RBAC does not exist yet, so **all authenticated users can read the audit
-log** until roles land in a later Governance phase.
+**Authorization (RBAC):** every endpoint requires an authenticated, active user
+**and** the ``audit.read`` permission. Authentication alone is no longer
+sufficient - an authenticated caller without ``audit.read`` gets ``403``.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, Query, status
 from fastapi.exceptions import HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_permission
 from app.db.session import get_db
 from app.schemas.audit import (
     DEFAULT_PAGE_SIZE,
@@ -48,7 +48,7 @@ from app.services.audit import (
 router = APIRouter(
     prefix="/audit",
     tags=["audit"],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(get_current_user), Depends(require_permission("audit.read"))],
 )
 
 _NOT_FOUND = HTTPException(

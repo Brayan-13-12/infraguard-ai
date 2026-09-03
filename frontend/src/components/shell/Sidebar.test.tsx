@@ -7,6 +7,7 @@ import { Sidebar } from "@/components/shell/Sidebar";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
 import { LanguageProvider } from "@/i18n";
 import * as authService from "@/services/auth";
+import { makeUser, VIEWER_USER } from "@/test/fixtures";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard",
@@ -20,12 +21,7 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-const USER = {
-  id: "u1",
-  email: "user@example.com",
-  is_active: true,
-  created_at: "2026-08-31T00:00:00Z",
-};
+const USER = makeUser({ id: "u1" });
 
 const MODULE_LABELS = [
   "Dashboard",
@@ -33,6 +29,7 @@ const MODULE_LABELS = [
   "Incidents",
   "Audit",
   "Trash",
+  "Administration",
   "AI Assistant",
   "Settings",
 ];
@@ -65,33 +62,65 @@ describe("Sidebar", () => {
     expect(dashboard).toHaveAttribute("aria-current", "page");
   });
 
-  it("links Assets as an active route", () => {
+  it("links Assets as an active route", async () => {
     renderSidebar();
-    expect(screen.getByRole("link", { name: "Assets" })).toHaveAttribute("href", "/assets");
+    expect(await screen.findByRole("link", { name: "Assets" })).toHaveAttribute(
+      "href",
+      "/assets",
+    );
   });
 
-  it("links Incidents as an active route", () => {
+  it("links Incidents as an active route", async () => {
     renderSidebar();
-    expect(screen.getByRole("link", { name: "Incidents" })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: "Incidents" })).toHaveAttribute(
       "href",
       "/incidents",
     );
   });
 
-  it("links Audit as an active route with an English label", () => {
+  it("links Audit as an active route with an English label", async () => {
     renderSidebar();
-    expect(screen.getByRole("link", { name: "Audit" })).toHaveAttribute("href", "/audit");
+    expect(await screen.findByRole("link", { name: "Audit" })).toHaveAttribute(
+      "href",
+      "/audit",
+    );
     expect(screen.queryByText("Auditoría")).not.toBeInTheDocument();
   });
 
-  it("links Trash as an active route, after Audit, with an English label", () => {
+  it("links Trash as an active route, after Audit, with an English label", async () => {
     renderSidebar();
-    const trash = screen.getByRole("link", { name: "Trash" });
+    const trash = await screen.findByRole("link", { name: "Trash" });
     expect(trash).toHaveAttribute("href", "/trash");
     expect(screen.queryByText("Papelera")).not.toBeInTheDocument();
 
     const links = screen.getAllByRole("link").map((a) => a.getAttribute("href"));
     expect(links.indexOf("/trash")).toBeGreaterThan(links.indexOf("/audit"));
+  });
+
+  it("links Administration as an active route, after Trash, for a user with admin permissions", async () => {
+    renderSidebar();
+    const admin = await screen.findByRole("link", { name: "Administration" });
+    expect(admin).toHaveAttribute("href", "/admin");
+    const links = screen.getAllByRole("link").map((a) => a.getAttribute("href"));
+    expect(links.indexOf("/admin")).toBeGreaterThan(links.indexOf("/trash"));
+  });
+
+  it("hides permissioned modules from a user who lacks the permission", async () => {
+    vi.spyOn(authService, "fetchMe").mockResolvedValue({ ok: true, data: VIEWER_USER });
+    render(
+      <ThemeProvider>
+        <LanguageProvider>
+          <AuthProvider>
+            <Sidebar />
+          </AuthProvider>
+        </LanguageProvider>
+      </ThemeProvider>,
+    );
+    expect(await screen.findByRole("link", { name: "Assets" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Incidents" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Audit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Trash" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Administration" })).not.toBeInTheDocument();
   });
 
   it("is a single flat list with no visible section headings", () => {
@@ -116,8 +145,10 @@ describe("Sidebar", () => {
     expect(screen.queryByText(/·\s*soon/i)).not.toBeInTheDocument();
   });
 
-  it("keeps module labels in English", () => {
+  it("keeps module labels in English", async () => {
     renderSidebar();
+    // Administration is permissioned - wait for the auth check to resolve.
+    await screen.findByText("Administration");
     for (const label of MODULE_LABELS) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }

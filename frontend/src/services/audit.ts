@@ -13,6 +13,7 @@ const REQUEST_TIMEOUT_MS = 8000;
 export type AuditErrorKind =
   | "unreachable"
   | "unauthorized"
+  | "forbidden"
   | "not_found"
   | "unexpected";
 
@@ -60,7 +61,8 @@ async function request(url: string): Promise<{ status: number; body: unknown } |
 }
 
 function errorFor(status: number): { kind: AuditErrorKind } {
-  if (status === 401 || status === 403) return { kind: "unauthorized" };
+  if (status === 401) return { kind: "unauthorized" };
+  if (status === 403) return { kind: "forbidden" };
   if (status === 404) return { kind: "not_found" };
   return { kind: "unexpected" };
 }

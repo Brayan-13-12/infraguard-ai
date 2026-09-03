@@ -4,13 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider, useAuth } from "@/components/AuthProvider";
 import * as authService from "@/services/auth";
+import { makeUser } from "@/test/fixtures";
 
-const USER = {
-  id: "u1",
-  email: "user@example.com",
-  is_active: true,
-  created_at: "2026-08-31T00:00:00Z",
-};
+const USER = makeUser({ id: "u1" });
 
 afterEach(() => vi.restoreAllMocks());
 

@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 
 import { AssetStatusBadge, CriticalityBadge } from "@/components/assets/AssetBadges";
 import { assetTypeLabel, environmentLabel } from "@/components/assets/catalog";
+import { useAuth } from "@/components/AuthProvider";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -129,6 +130,7 @@ export function MoveIncidentToTrashButton({
   size?: "sm" | "md";
 }) {
   const { t } = useTranslation();
+  const { can } = useAuth();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -148,6 +150,8 @@ export function MoveIncidentToTrashButton({
       setError(t("incidentDetail.moveToTrashError"));
     }
   }
+
+  if (!can("incidents.delete")) return null;
 
   return (
     <>
@@ -195,6 +199,7 @@ export function IncidentLifecycleActions({
   size?: "sm" | "md";
 }) {
   const { t } = useTranslation();
+  const { can } = useAuth();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -221,6 +226,8 @@ export function IncidentLifecycleActions({
       setError(t("incidentDetail.actionError"));
     }
   }
+
+  if (!can("incidents.resolve")) return null;
 
   return (
     <>
@@ -275,6 +282,7 @@ export function IncidentDetailContent({
   onChanged: (incident: IncidentDetailT) => void;
 }) {
   const { t, language } = useTranslation();
+  const canEdit = useAuth().can("incidents.update");
   const locale = LANGUAGE_LOCALES[language];
   const idBase = useTabsId("incident-detail");
   const isTerminal = TERMINAL_INCIDENT_STATUSES.includes(incident.status);
@@ -419,10 +427,10 @@ export function IncidentDetailContent({
     return persist(patch, field);
   }
 
-  const editRow = (field: IncidentFieldKey) => ({
-    onEdit: () => setEditing(field),
-    editLabel: configs[field].title,
-  });
+  const editRow = (field: IncidentFieldKey) =>
+    canEdit
+      ? { onEdit: () => setEditing(field), editLabel: configs[field].title }
+      : {};
 
   const activeCfg = editing ? configs[editing] : null;
   const affectedCount = incident.affected_assets.length;
@@ -501,12 +509,14 @@ export function IncidentDetailContent({
 
       {/* Activos afectados */}
       <div {...tabPanelProps(idBase, "affected")} hidden={tab !== "affected"} className="pt-4">
-        <div className="mb-3 flex justify-end">
-          <Button variant="secondary" size="sm" onClick={() => setEditingAssets(true)}>
-            <PencilIcon className="h-3.5 w-3.5" />
-            {t("incidentDetail.editAffected")}
-          </Button>
-        </div>
+        {canEdit ? (
+          <div className="mb-3 flex justify-end">
+            <Button variant="secondary" size="sm" onClick={() => setEditingAssets(true)}>
+              <PencilIcon className="h-3.5 w-3.5" />
+              {t("incidentDetail.editAffected")}
+            </Button>
+          </div>
+        ) : null}
         <IncidentAffectedAssets incident={incident} />
       </div>
 

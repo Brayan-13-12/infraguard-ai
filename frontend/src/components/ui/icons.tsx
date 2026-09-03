@@ -215,6 +215,28 @@ export const ChevronRightIcon = (p: IconProps) => (
   </Base>
 );
 
+export const UsersIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+  </Base>
+);
+
+export const ShieldCheckIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" />
+    <path d="m9 12 2 2 4-4" />
+  </Base>
+);
+
+export const KeyIcon = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="7.5" cy="15.5" r="4.5" />
+    <path d="m10.5 12.5 8-8M17 5l2.5 2.5M13.5 8.5 16 11" />
+  </Base>
+);
+
 export const FilterIcon = (p: IconProps) => (
   <Base {...p}>
     <path d="M3 5h18l-7 8v6l-4 2v-8L3 5Z" />

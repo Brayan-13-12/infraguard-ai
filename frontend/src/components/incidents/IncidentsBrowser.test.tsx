@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { IncidentsBrowser } from "@/components/incidents/IncidentsBrowser";
 import { LanguageProvider } from "@/i18n";
+import { VIEWER_USER } from "@/test/fixtures";
+import { MockAuthProvider } from "@/test/MockAuthProvider";
 import { notifyIncidentsChanged } from "@/lib/incidentsRefresh";
 import * as assetService from "@/services/assets";
 import * as incidentService from "@/services/incidents";
@@ -58,10 +60,12 @@ const SUMMARY: IncidentSummary = {
   by_status: { Open: 1, Investigating: 1, Identified: 0, Monitoring: 0, Resolved: 1, Closed: 0 },
 };
 
-function renderBrowser() {
+function renderBrowser(user?: Parameters<typeof MockAuthProvider>[0]["user"]) {
   return render(
     <LanguageProvider>
-      <IncidentsBrowser />
+      <MockAuthProvider user={user}>
+        <IncidentsBrowser />
+      </MockAuthProvider>
     </LanguageProvider>,
   );
 }
@@ -119,6 +123,18 @@ describe("IncidentsBrowser", () => {
     const ctas = screen.getAllByRole("link", { name: /nuevo incidente/i });
     expect(ctas.length).toBeGreaterThan(0);
     for (const cta of ctas) expect(cta).toHaveAttribute("href", "/incidents/new");
+  });
+
+  it("hides the 'New incident' action from a user without incidents.create", async () => {
+    vi.spyOn(incidentService, "listIncidents").mockResolvedValue({
+      ok: true,
+      data: page([incident({})]),
+    });
+    renderBrowser(VIEWER_USER);
+    await screen.findAllByRole("link", { name: "Checkout latency spike" });
+    expect(
+      screen.queryByRole("link", { name: /nuevo incidente/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders an error state and retries on demand", async () => {

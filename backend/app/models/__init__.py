@@ -29,9 +29,16 @@ from app.models.incident import (
     IncidentSeverity,
     IncidentStatus,
 )
-from app.models.user import User
+from app.models.rbac import (
+    Permission,
+    Role,
+    RolePermission,
+    UserRole,
+)
+from app.models.user import AccountStatus, User
 
 __all__ = [
+    "AccountStatus",
     "Asset",
     "AssetStatus",
     "AssetType",
@@ -48,5 +55,9 @@ __all__ = [
     "IncidentPriority",
     "IncidentSeverity",
     "IncidentStatus",
+    "Permission",
+    "Role",
+    "RolePermission",
     "User",
+    "UserRole",
 ]
