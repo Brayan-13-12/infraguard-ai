@@ -17,14 +17,14 @@ app/
 ├── api/
 │   ├── deps.py      # get_current_user, CSRF origin check, rate limiter
 │   ├── errors.py    # sanitized 422 validation handler + generic 503 for DB-unavailable
-│   └── v1/routes/   # health.py, auth.py, assets.py
+│   └── v1/routes/   # health, auth, assets, incidents, audit, trash, admin, ai
 ├── core/            # config.py, security.py (Argon2 + JWT), ratelimit.py
 ├── db/              # engine, session, declarative base, registry
-├── models/          # user.py, asset.py (+ catalog StrEnums)
-├── schemas/         # health.py, auth.py, asset.py
+├── models/          # user, asset, incident, audit, rbac, ai (+ catalog StrEnums)
+├── schemas/         # per-domain request/response models (incl. ai.py)
 ├── main.py          # app factory + no-store middleware for /api/v1/auth/*
-└── services/        # health.py, users.py, assets.py
-alembic/versions/    # *_create_users_table.py, *_create_assets_table.py
+└── services/        # health, users, assets, incidents, audit, rbac, ai/ (package)
+alembic/versions/    # 8 migrations: users → assets → incidents → audit → soft-delete → rbac → lifecycle → ai
 tests/
 ├── dbguard.py       # test-only database safety guard (shared)
 ├── unit/            # fast, no database
@@ -82,11 +82,17 @@ requirements*.txt    # fully-resolved, hash-pinned locks (generated)
 | `PATCH`| `/api/v1/admin/roles/{id}` | Rename / re-describe a **custom** role (audit `UPDATE`). **`roles.manage` + CSRF.** | `200` / `401` / `403` / `404` / `409` |
 | `PUT`  | `/api/v1/admin/roles/{id}/permissions` | Replace a **custom** role's permissions (audit `PERMISSION_CHANGED`). **`roles.manage` + CSRF.** | `200` / `401` / `403` / `404` / `409` / `422` |
 | `DELETE`| `/api/v1/admin/roles/{id}` | Delete an unused custom role (audit `DELETE`). **`roles.manage` + CSRF.** | `200` / `401` / `403` / `404` / `409` |
+| `GET`  | `/api/v1/ai/capabilities` | Provider (`name` / `model` / `ready`), `message_max_length`, and the tool list with a per-caller `available` flag. **`ai.use`.** | `200` / `401` / `403` |
+| `GET`  | `/api/v1/ai/conversations` | The caller's **own** conversations, `updated_at DESC, id DESC` (`page`, `page_size` 30 max 100; correlated `message_count`, no N+1). **`ai.use`.** | `200` / `401` / `403` / `422` |
+| `POST` | `/api/v1/ai/conversations` | Start a thread. Optional `context` = `{asset_id}` \| `{incident_id}` (never both) is re-fetched + permission- + liveness-checked server-side. **`ai.use` + CSRF.** | `201` / `401` / `403` / `404` / `422` |
+| `GET`  | `/api/v1/ai/conversations/{id}` | Thread + full ordered message list. **Owner only** - a non-owner (Administrator included) gets `404`, not `403`. **`ai.use`.** | `200` / `401` / `403` / `404` |
+| `DELETE`| `/api/v1/ai/conversations/{id}` | Real delete of the thread + its messages (private history; **not** Trash). Owner only. **`ai.use` + CSRF.** | `200` / `401` / `403` / `404` |
+| `POST` | `/api/v1/ai/conversations/{id}/messages` | Persist the user turn, run the grounded read-only orchestrator, persist the assistant turn. Returns `{conversation_id, title, user_message, assistant_message}` with `evidence` / `entities` / `suggestions`. Owner only; per-user rate limit; provider failure → typed `503 {detail:{code,message}}` (`provider_unavailable` / `provider_timeout` / `provider_unsupported` / `tool_failure`) with the user turn preserved. **`ai.use` + CSRF.** | `200` / `401` / `403` / `404` / `422` / `429` / `503` |
 
-Every `assets` / `incidents` / `audit` / `trash` / `admin` endpoint requires
+Every `assets` / `incidents` / `audit` / `trash` / `admin` / `ai` endpoint requires
 authentication **and the matching RBAC permission** (`deps.require_permission`) -
 an authenticated caller without it gets **`403`** (never `401`). See
-*RBAC & user administration* below.
+*RBAC & user administration* and *AI Assistant* below.
 
 The audit log is **read-only + append-only**: there is deliberately no
 `POST` / `PUT` / `PATCH` / `DELETE` route (those verbs → `405`).
@@ -396,6 +402,143 @@ Unchanged: an **absolute** 30-minute HS256 JWT
 auth-cookie `Max-Age` tracks it). No refresh tokens, no activity extension, no
 revocation.
 
+## AI Assistant (read-only intelligence - v1)
+
+`app/services/ai/` + `app/api/v1/routes/ai.py` + `app/models/ai.py` +
+`app/schemas/ai.py`. A grounded, permission-aware assistant over the caller's
+**real** InfraGuard data. **v1 performs no mutations** of operational data - no
+create / update / delete / restore / re-permission, no Trash, no Audit writes, no
+RBAC bypass. A future explicitly-confirmed action layer owns that.
+
+### Module layout
+
+```
+app/services/ai/
+├── conversations.py   # ownership-scoped CRUD, deterministic title derivation
+├── context.py         # resolve + permission/liveness-check an asset/incident context
+├── tools.py           # THE SECURITY BOUNDARY - allow-listed read-only tools
+├── orchestrator.py    # run_turn(): persist user msg, commit, run provider, persist reply
+└── providers/
+    ├── base.py          # AIProvider ABC, ProviderRequest/Result, SYSTEM_BOUNDARY
+    ├── deterministic.py  # default; no API key; real tools + intent matching
+    ├── openai.py         # optional; stdlib urllib; behind the same ABC
+    └── __init__.py       # build_provider() from settings; lru_cache; get_provider()
+```
+
+### Persistence
+
+`ai_conversations` (`id`, `user_id` → `users.id` `ON DELETE CASCADE`, `title`,
+nullable `context_type` / `context_id` with set-together + enum CHECKs,
+`created_at`, `updated_at`) and `ai_messages` (`id`, `conversation_id` →
+`ai_conversations.id` `ON DELETE CASCADE`, `role` CHECK `IN ('user','assistant')`,
+`content`, bounded sanitized `metadata` JSONB, `created_at` with **both** a Python
+`default` and a `server_default` so turn ordering is deterministic even under the
+savepoint-per-test transaction). Migration `f6a7b8c9d0e1`
+(`revises e5f6a7b8c9d0`); `upgrade` re-runs `seed_rbac` (adds `ai.use`),
+`downgrade` drops both tables and leaves the additive permission row.
+
+- **Strict ownership.** `get_owned_conversation()` returns `None` for a
+  non-owner; the route turns that into `404` (never `403`, never another user's
+  data). Administrator status grants nothing here.
+- **Real delete.** `DELETE` issues `DELETE` statements - private AI history is not
+  routed through the operational Trash module. Documented, intentional.
+- **Titles** come from `derive_title(first_user_message)` - deterministic
+  (strip punctuation, truncate on a word boundary, capitalise); **no LLM call**.
+
+### Tool layer (`tools.py`) - the security boundary
+
+A frozen `REGISTRY: dict[str, Tool]` of **10** read-only tools. Each `Tool` has a
+name, a description, **one required `permission`**, a Pydantic `input_model`
+(`extra="forbid"`, every field bounded), and a `run(db, params)` that reuses the
+existing domain services and returns a `ToolResult` (data + one `AIEvidenceItem` +
+`AIEntityRef`s). Serialisers are **whitelists** (`_asset_dict` / `_incident_dict`
+emit id / name / type / environment / criticality / status / owner … and *never*
+a user, hash, token or secret field).
+
+| Tools | Permission |
+| --- | --- |
+| `search_assets`, `get_asset`, `summarize_assets`, `get_dashboard_overview` | `assets.read` |
+| `search_incidents`, `get_incident`, `summarize_incidents`, `get_incident_timeline` | `incidents.read` |
+| `search_audit`, `get_audit_event` | `audit.read` |
+
+`ToolExecutor(db, permissions)`:
+
+- `available()` / `can(name)` - filter by the caller's effective permissions.
+- `call(name, params)` - `UnknownToolError` for an unknown name;
+  **`ToolPermissionError` if `tool.permission not in permissions`** (checked in
+  Python, *before* `run`, regardless of anything a user message said);
+  `ToolInputError` on schema violation; then `run`. Results are collected for
+  evidence / entity aggregation.
+
+There is **no** arbitrary-SQL tool, no raw-query tool, no generic HTTP / shell /
+filesystem tool, and no mutation tool - asserted by
+`tests/unit/test_ai_tools.py::test_every_tool_is_read_only_and_permission_gated`.
+
+### Orchestrator (`run_turn`)
+
+authenticate → `require_permission("ai.use")` → load **owned** conversation →
+resolve context (permission + liveness) → **sweep a dangling user turn** (see
+below) → **persist the user message, set the title, `commit`** → build the
+bounded history window → `provider.generate(request)` with a `ToolExecutor` → on
+success persist the assistant message + sanitised metadata and `commit`; on
+`ProviderTimeout` / `ProviderUnavailable` / `ProviderUnsupported` / `ToolError` →
+`db.rollback()` and raise a typed `AIError` (the route maps it to
+`503 {detail:{code,message}}`). The DB write transaction is **not** held open
+across the provider call, and a provider failure never fabricates a successful
+assistant turn - the user message stays for retry.
+
+**Dangling-turn sweep.** A failed turn leaves its user message with no assistant
+reply. When the *next* turn starts, if the last stored message is an unanswered
+`user` message the orchestrator removes it (`conv_service.remove_message`) before
+appending the new one - so a **retry regenerates that turn** instead of stacking
+a second identical user message. The normal flow never otherwise leaves a
+trailing user message, so the sweep only ever touches a genuinely dangling turn.
+
+### Providers
+
+`AI_PROVIDER` (`deterministic` | `openai`), `AI_MODEL`, `AI_API_KEY`,
+`AI_OPENAI_BASE_URL`, `AI_REQUEST_TIMEOUT_SECONDS`. **Keys are backend-only.**
+`get_provider()` is `lru_cache`d.
+
+- **`DeterministicProvider`** (default) - `ready` always `True`, **no API key**.
+  Normalises the message (strip accents, lowercase), matches a documented intent
+  (asset/incident summary · search · critical · inactive; open / critical
+  incidents; asset↔incident relationship; recent audit changes; context-scoped
+  asset/incident questions), runs the **real** tools against the **real** DB, and
+  returns a grounded Spanish answer. It also answers a small **product/help
+  intent** - *"¿Qué es InfraGuard AI?"* / *"¿Qué puedes hacer?"* /
+  *"¿En qué me puedes ayudar?"* and Spanish variants - with a static description
+  of the platform and a capability list **scoped to the caller's permissions**
+  (`ex.can(tool)`, not a second copy of RBAC); this answer carries **no
+  evidence / entities** because it is not a data lookup. Anything outside every
+  intent → *"Esta consulta requiere un proveedor de IA avanzado…"*. A
+  `ToolPermissionError` → *"No tienes permiso para consultar {la Auditoría}…"*.
+  It never invents an entity or a fact.
+- **`OpenAIProvider`** (optional) - stdlib `urllib` (no new runtime dep), tool
+  schemas from each `input_model`, a bounded tool-call loop, `SYSTEM_BOUNDARY`
+  system prompt, `ProviderTimeout` / `ProviderUnavailable` on transport error.
+  `ready = bool(api_key)`; if not ready the Assistant degrades gracefully and the
+  rest of InfraGuard is unaffected.
+
+### Prompt / tool-injection posture
+
+User messages are untrusted. Enforcement is in code: the executor authorises
+every tool call by permission set; the whitelist serialisers bound what leaves
+the DB; the route never serialises secrets, hashes, tokens, env vars, SQL or
+stack traces. `SYSTEM_BOUNDARY` additionally *instructs* the model to refuse
+rule-breaking requests, but the guarantee is the backend, not the prompt.
+`tests/integration/test_ai_rbac.py` covers "a Viewer cannot obtain Audit data via
+AI".
+
+### Rate limiting & auditing
+
+A dedicated `RateLimiter(AI_RATE_LIMIT_MAX_MESSAGES, AI_RATE_LIMIT_WINDOW_SECONDS)`
+keyed `ai-message:{user_id}` - stricter than ordinary reads, typed `429` +
+`Retry-After`, `reset_ai_rate_limiter()` for deterministic tests. **AI activity
+writes no audit events in v1** (nothing to correlate for a read-only feature;
+conversation content is already owner-visible; direct reads are not audited
+either) - revisit with the action layer.
+
 ## Authentication
 
 ### User model
@@ -535,13 +678,15 @@ docker compose run --rm migrate
 
 `alembic/env.py` imports `app.db.registry` (which imports every model) so
 autogenerate sees the full metadata. The DB URL comes from `app.core.config` -
-never duplicated into Alembic files. Six migrations so far: `users` → `assets` →
+never duplicated into Alembic files. Eight migrations so far: `users` → `assets` →
 `incidents` (+ `incident_assets` / `incident_events`) → `audit_events` /
 `audit_changes` → `c3d4e5f6a7b8` *add soft delete* → `d4e5f6a7b8c9` *add RBAC:
-roles, permissions, user_roles, role_permissions* (the last one **seeds** the
-catalog + system roles via `app.services.rbac.seed_rbac` and heals a pre-RBAC
-install). Each was hand-reviewed and validated on the Docker PostgreSQL
-(`upgrade → downgrade → upgrade`, plus `alembic check` shows no model/DB drift).
+roles, permissions, user_roles, role_permissions* (**seeds** the catalog + system
+roles via `app.services.rbac.seed_rbac` and heals a pre-RBAC install) →
+`e5f6a7b8c9d0` *account lifecycle* → `f6a7b8c9d0e1` *add AI Assistant:
+`ai_conversations` / `ai_messages` + re-seed `ai.use`*. Each was hand-reviewed and
+validated on the Docker PostgreSQL (`upgrade → check → downgrade → upgrade`, no
+model/DB drift).
 
 ## Configuration & `.env` resolution
 
@@ -577,6 +722,15 @@ read **only** by `python -m app.scripts.bootstrap_admin` (and the
 fails safely (exit 1) when either is missing. Never consumed at app startup, so
 an unconfigured deployment simply has no bootstrap admin until the command is
 run.
+
+AI Assistant keys: `AI_PROVIDER` (`deterministic` default | `openai`), `AI_MODEL`,
+`AI_API_KEY` (**backend only** - never a `NEXT_PUBLIC_*`; unset ⇒ a real provider
+reports "not ready" and the Assistant degrades gracefully), `AI_OPENAI_BASE_URL`,
+`AI_REQUEST_TIMEOUT_SECONDS` (`0 < t <= 120`), `AI_MESSAGE_MAX_LENGTH`,
+`AI_MAX_TOOL_RESULTS`, `AI_HISTORY_WINDOW`, `AI_RATE_LIMIT_MAX_MESSAGES` /
+`AI_RATE_LIMIT_WINDOW_SECONDS`. **No key is required for tests, Docker, CI or a
+normal startup** - the default provider uses the real database, not an external
+model.
 
 ## Local development (without Docker)
 
@@ -621,8 +775,10 @@ pytest -m integration        # integration only
   password policy / schema serialization, the rate limiter, health-endpoint
   behaviour, **the 422 no-reflection guard**, **the no-store header rule**, **the
   test-DB safety guard**, the **asset schema validation**, the **RBAC catalog**
-  (`test_rbac_catalog.py`: 16 codes, Administrator = all, role matrix), and that
-  **every asset / admin endpoint rejects an unauthenticated request** first.
+  (`test_rbac_catalog.py`: 17 codes incl. `ai.use`, Administrator = all, every
+  system role can use AI, role matrix), the **AI tool + deterministic-provider
+  contract**, and that **every asset / admin / ai endpoint rejects an
+  unauthenticated request** first.
 * **Integration** (`tests/integration/`) - each test runs in a transaction that
   is rolled back; the session-scoped fixture seeds the RBAC catalog once
   (committed). Exercises register / login / `me` / logout, the full asset /
@@ -657,6 +813,22 @@ pytest -m integration        # integration only
     Dashboard summaries reflect the seed; both lists span multiple pages; the
     seed raises `SeedError` (writing nothing) when no active Administrator
     exists.
+  - **AI Assistant** - `test_ai_conversations.py` (create / list-own-only /
+    get-own / cross-user `404` / delete / pagination + `updated_at DESC` order /
+    deterministic bounded title), `test_ai_chat.py` (both turns persisted,
+    `updated_at` advances, max length, empty rejected, missing conversation,
+    ownership), `test_ai_rbac.py` (**no `ai.use` → denied**; `ai.use` +
+    `assets.read` → asset tool works; `ai.use` **without** `audit.read` → an
+    Audit question yields *no audit data*; no bypass), `test_ai_context.py`
+    (context re-fetched + permission/liveness enforced; a tampered id grants
+    nothing), `test_ai_failure.py` (provider failure / tool failure → typed
+    `503`, user message kept; **retry after failure sweeps the dangling turn -
+    no duplicate user message**), plus `tests/unit/test_ai_tools.py` (input
+    validation, bounded sizes, **every tool read-only + permission-gated**) and
+    `tests/unit/test_ai_provider_deterministic.py` (grounded known query,
+    general knowledge → "requiere un proveedor de IA avanzado", **product/help
+    intent answered without a provider and scoped to permissions, with no
+    fabricated evidence**, never fabricates an entity, missing entity handled).
 
   `auth_client` is a logged-in **Administrator** - the fixture registers, then
   activates + assigns the role directly on the test session (the equivalent of an

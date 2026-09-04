@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import { AssetStatusBadge, CriticalityBadge } from "@/components/assets/AssetBadges";
 import { assetTypeLabel, environmentLabel } from "@/components/assets/catalog";
 import { useAuth } from "@/components/AuthProvider";
+import { AskAiButton } from "@/components/ai/AskAiButton";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -609,6 +610,7 @@ export function IncidentDetail({
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <AskAiButton entity={{ type: "incident", id: incident.id }} />
           <MoveIncidentToTrashButton incident={incident} onDeleted={onDeleted ?? (() => {})} />
           <IncidentLifecycleActions incident={incident} onChanged={onChanged} />
         </div>

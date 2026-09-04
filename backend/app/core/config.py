@@ -124,6 +124,28 @@ class Settings(BaseSettings):
     AUTH_RATE_LIMIT_MAX_ATTEMPTS: int = Field(default=10, gt=0)
     AUTH_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60, gt=0)
 
+    # --- AI Assistant (read-only intelligence - v1) ---
+    # ``deterministic`` needs no external service and is the default for local
+    # development, tests and CI. ``openai`` activates the optional real adapter
+    # (backend-only; requires AI_API_KEY). If a real provider is selected but no
+    # key is configured the assistant degrades gracefully to a clear message -
+    # InfraGuard stays fully usable.
+    AI_PROVIDER: Literal["deterministic", "openai"] = "deterministic"
+    AI_MODEL: str = "infraguard-deterministic-v1"
+    AI_API_KEY: str | None = None
+    AI_OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+    #: Hard ceiling on a single provider call (seconds).
+    AI_REQUEST_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0, le=120)
+    #: Max length of a single user message (enforced backend + frontend).
+    AI_MESSAGE_MAX_LENGTH: int = Field(default=4000, gt=0, le=20000)
+    #: Rows any single AI tool may return (grounding stays bounded / minimal).
+    AI_MAX_TOOL_RESULTS: int = Field(default=25, gt=0, le=100)
+    #: Recent messages replayed to the provider for continuity.
+    AI_HISTORY_WINDOW: int = Field(default=10, gt=0, le=50)
+    #: Per-user message rate limit (stricter than ordinary reads).
+    AI_RATE_LIMIT_MAX_MESSAGES: int = Field(default=20, gt=0)
+    AI_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60, gt=0)
+
     # --- Bootstrap Administrator (Governance Phase 3) ---
     # Credentials for the explicit `python -m app.scripts.bootstrap_admin` command
     # (and the `bootstrap` compose one-shot). Used ONLY by that command - never on

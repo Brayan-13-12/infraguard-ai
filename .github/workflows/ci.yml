@@ -157,7 +157,7 @@ jobs:
 
           echo "the bootstrapped Administrator can log in (never registered)"
           test "$(curl -s -o /dev/null -w '%{http_code}' -c "$ADMIN" -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-admin@example.com\",\"password\":\"$PW\"}" "$API/auth/login")" = "200"
-          curl -s -b "$ADMIN" "$API/auth/me" | python3 -c "import sys,json; d=json.load(sys.stdin); assert [r['slug'] for r in d['roles']]==['administrator'], d['roles']; assert len(d['permissions'])==16, d['permissions']; assert d['account_status']=='active'"
+          curl -s -b "$ADMIN" "$API/auth/me" | python3 -c "import sys,json; d=json.load(sys.stdin); assert [r['slug'] for r in d['roles']]==['administrator'], d['roles']; assert len(d['permissions'])==17, d['permissions']; assert 'ai.use' in d['permissions']; assert d['account_status']=='active'"
 
           echo "public registration creates a PENDING access request (no roles, no access)"
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-request@example.com\",\"password\":\"$PW\"}" "$API/auth/register")" = "201"
@@ -181,7 +181,7 @@ jobs:
           echo "approve as Viewer -> account becomes ACTIVE and can log in with exactly the Viewer permissions"
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$ADMIN" -H "$ORIGIN" -H "$CT" -X POST -d "{\"role_ids\":[\"$VROLE\"]}" "$API/admin/users/$REQ_ID/approve")" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' -c "$VIEWER" -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-request@example.com\",\"password\":\"$PW\"}" "$API/auth/login")" = "200"
-          curl -s -b "$VIEWER" "$API/auth/me" | python3 -c "import sys,json; d=json.load(sys.stdin); assert sorted(d['permissions'])==['assets.read','incidents.read'], d['permissions']; assert d['account_status']=='active'"
+          curl -s -b "$VIEWER" "$API/auth/me" | python3 -c "import sys,json; d=json.load(sys.stdin); assert sorted(d['permissions'])==['ai.use','assets.read','incidents.read'], d['permissions']; assert d['account_status']=='active'"
 
           echo "viewer: can read, cannot mutate (403, never 401)"
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$VIEWER" "$API/assets")" = "200"
@@ -189,6 +189,21 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$VIEWER" "$API/audit")" = "403"
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$VIEWER" "$API/admin/users")" = "403"
           test "$(curl -s -o /dev/null -w '%{http_code}' "$API/admin/users")" = "401"
+
+          echo "AI Assistant: deterministic provider, grounded in real data, read-only"
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$API/ai/capabilities")" = "401"
+          curl -s -b "$ADMIN" "$API/ai/capabilities" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['provider']=='deterministic' and d['ready'] and d['read_only'], d"
+          # a critical production asset to ground the answer in
+          curl -s -b "$ADMIN" -H "$ORIGIN" -H "$CT" -d '{"name":"ci-ai-prod-01","asset_type":"Server","environment":"Production","criticality":"Critical","status":"Operational"}' "$API/assets" >/dev/null
+          ACONV=$(curl -s -b "$ADMIN" -H "$ORIGIN" -H "$CT" -d '{}' "$API/ai/conversations" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          curl -s -b "$ADMIN" -H "$ORIGIN" -H "$CT" -d '{"content":"Cuantos activos criticos de produccion hay?"}' "$API/ai/conversations/$ACONV/messages" | python3 -c "import sys,json; d=json.load(sys.stdin); m=d['assistant_message']; assert 'ci-ai-prod-01' in m['content'], m['content']; assert any(e['source']=='assets' for e in m['evidence']), m['evidence']; assert any(x['id'] for x in m['entities']), m"
+          # the turn is persisted and retrievable
+          curl -s -b "$ADMIN" "$API/ai/conversations/$ACONV" | python3 -c "import sys,json; d=json.load(sys.stdin); assert [x['role'] for x in d['messages']]==['user','assistant'], d['messages']"
+          # AI is never a permission bypass: a caller with ai.use but NOT audit.read cannot get audit data through the AI
+          VCONV=$(curl -s -b "$VIEWER" -H "$ORIGIN" -H "$CT" -d '{}' "$API/ai/conversations" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          curl -s -b "$VIEWER" -H "$ORIGIN" -H "$CT" -d '{"content":"Muestrame los cambios recientes en la auditoria"}' "$API/ai/conversations/$VCONV/messages" | python3 -c "import sys,json; d=json.load(sys.stdin); c=d['assistant_message']['content'].lower(); assert 'permiso' in c, c; assert not d['assistant_message']['evidence'], d['assistant_message']"
+          # ... and the AI never invents an endpoint to mutate: there is no POST tool
+          curl -s -b "$ADMIN" "$API/ai/capabilities" | python3 -c "import sys,json; d=json.load(sys.stdin); assert all(t['name'].split('_')[0] in {'search','get','summarize'} for t in d['tools']), d['tools']"
 
           echo "reject flow: a second request -> REJECTED -> login denied with account_rejected"
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-reject@example.com\",\"password\":\"$PW\"}" "$API/auth/register")" = "201"

@@ -133,9 +133,31 @@ describe("Sidebar", () => {
     }
   });
 
+  it("links AI Assistant as an active route for a user with ai.use", async () => {
+    renderSidebar();
+    const ai = await screen.findByRole("link", { name: "AI Assistant" });
+    expect(ai).toHaveAttribute("href", "/ai");
+    expect(ai.closest("[aria-disabled='true']")).toBeNull();
+  });
+
+  it("hides AI Assistant from a user who lacks ai.use", async () => {
+    vi.spyOn(authService, "fetchMe").mockResolvedValue({ ok: true, data: VIEWER_USER });
+    render(
+      <ThemeProvider>
+        <LanguageProvider>
+          <AuthProvider>
+            <Sidebar />
+          </AuthProvider>
+        </LanguageProvider>
+      </ThemeProvider>,
+    );
+    await screen.findByRole("link", { name: "Assets" });
+    expect(screen.queryByText("AI Assistant")).not.toBeInTheDocument();
+  });
+
   it("renders unbuilt modules as disabled items with a quiet marker, not links", () => {
     renderSidebar();
-    for (const label of ["AI Assistant", "Settings"]) {
+    for (const label of ["Settings"]) {
       expect(screen.queryByRole("link", { name: label })).not.toBeInTheDocument();
       const row = screen.getByText(label).closest("[aria-disabled='true']");
       expect(row).toBeTruthy();

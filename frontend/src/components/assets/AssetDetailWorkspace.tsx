@@ -6,6 +6,7 @@ import {
   AssetLifecycleButton,
   MoveToTrashButton,
 } from "@/components/assets/AssetDetail";
+import { AskAiButton } from "@/components/ai/AskAiButton";
 import { AssetDetailLoader } from "@/components/assets/AssetDetailLoader";
 import { InTrashNotice } from "@/components/trash/InTrashNotice";
 import { Button } from "@/components/ui/Button";
@@ -53,9 +54,12 @@ export function AssetDetailWorkspace({ id }: { id: string }) {
         );
 
         const footer = asset ? (
-          <div className="flex items-center justify-between gap-3">
-            <MoveToTrashButton asset={asset} onDeleted={close} />
-            <AssetLifecycleButton asset={asset} onChanged={setAsset} />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <AskAiButton entity={{ type: "asset", id: asset.id }} />
+            <div className="flex items-center gap-3">
+              <MoveToTrashButton asset={asset} onDeleted={close} />
+              <AssetLifecycleButton asset={asset} onChanged={setAsset} />
+            </div>
           </div>
         ) : undefined;
 

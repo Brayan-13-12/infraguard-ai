@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from app.db.base import Base
 from app.models import (
+    AIConversation,
+    AIMessage,
     Asset,
     AuditChange,
     AuditEvent,
@@ -21,6 +23,8 @@ from app.models import (
 )
 
 __all__ = [
+    "AIConversation",
+    "AIMessage",
     "Asset",
     "AuditChange",
     "AuditEvent",

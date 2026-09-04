@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { useAuth } from "@/components/AuthProvider";
+import { AskAiButton } from "@/components/ai/AskAiButton";
 import { RelatedIncidents } from "@/components/incidents/RelatedIncidents";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
@@ -520,6 +521,7 @@ export function AssetDetail({
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <AskAiButton entity={{ type: "asset", id: asset.id }} />
           <MoveToTrashButton asset={asset} onDeleted={onDeleted ?? (() => {})} />
           <AssetLifecycleButton asset={asset} onChanged={onChanged} />
         </div>

@@ -22,7 +22,7 @@ def test_permission_catalog_is_grouped(auth_client: TestClient) -> None:
     codes = {p["code"] for p in body["permissions"]}
     assert {"assets.read", "users.manage", "roles.manage", "audit.read"} <= codes
     assert "trash.purge" not in codes
-    assert body["groups"] == ["assets", "incidents", "audit", "trash", "users", "roles"]
+    assert body["groups"] == ["assets", "incidents", "audit", "trash", "users", "roles", "ai"]
     assert all(p["group"] in body["groups"] for p in body["permissions"])
 
 
@@ -46,9 +46,9 @@ def test_administrator_role_has_every_permission(auth_client: TestClient) -> Non
     [
         ("operator", {"assets.read", "assets.create", "assets.update", "incidents.read",
                       "incidents.create", "incidents.update", "incidents.resolve",
-                      "trash.read", "trash.restore"}),
-        ("analyst", {"assets.read", "incidents.read", "audit.read", "trash.read"}),
-        ("viewer", {"assets.read", "incidents.read"}),
+                      "trash.read", "trash.restore", "ai.use"}),
+        ("analyst", {"assets.read", "incidents.read", "audit.read", "trash.read", "ai.use"}),
+        ("viewer", {"assets.read", "incidents.read", "ai.use"}),
     ],
 )
 def test_system_role_permission_matrix(auth_client: TestClient, slug, expected) -> None:

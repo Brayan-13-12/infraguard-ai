@@ -949,6 +949,7 @@ const en: Translations = {
       trash: "Trash",
       users: "Users",
       roles: "Roles",
+      ai: "AI Assistant",
     },
     permissionLabels: {
       assets: {
@@ -979,7 +980,95 @@ const en: Translations = {
         read: "View roles and the permission catalog",
         manage: "Create, edit and delete custom roles",
       },
+      ai: {
+        use: "Use the AI Assistant to query infrastructure data",
+      },
     },
+  },
+  ai: {
+    title: "AI Assistant",
+    subtitle: "Intelligence grounded in your InfraGuard data",
+    readOnlyBadge: "Read-only",
+    newConversation: "New conversation",
+    conversations: "Conversations",
+    noConversations: "You have no conversations yet.",
+    today: "Today",
+    earlier: "Earlier",
+    deleteConversation: "Delete conversation",
+    deleteConfirmTitle: "Delete this conversation?",
+    deleteConfirmBody:
+      "“{title}” and all its messages will be deleted. This cannot be undone.",
+    deleteConfirm: "Delete",
+    deletedToast: "Conversation deleted.",
+    empty: {
+      title: "¿Qué quieres investigar?",
+      subtitle:
+        "Ask in natural language about your assets, incidents and recent changes. "
+        + "Answers are grounded in real InfraGuard data and respect your permissions.",
+    },
+    suggestions: {
+      criticalAssets: "Critical production infrastructure",
+      openIncidents: "Open incidents",
+      recentChanges: "Recent changes",
+      riskOverview: "Risk overview",
+    },
+    contextBanner: "Context: {label}",
+    contextUnavailable: "Context unavailable (no permission or in Trash)",
+    contextSuggestions: {
+      assetSummary: "Summarize this asset",
+      assetIncidents: "Which incidents have affected it?",
+      assetChanges: "What recent changes does it have?",
+      incidentSummary: "Summarize this incident",
+      incidentAssets: "Which assets are affected?",
+      incidentTimeline: "Show me its timeline",
+    },
+    composer: {
+      placeholder: "Ask about your infrastructure…",
+      send: "Send",
+      sending: "Sending…",
+      hint: "Enter to send · Shift+Enter for a new line",
+      charCount: "{count} / {max}",
+      tooLong: "The message exceeds the {max}-character limit.",
+    },
+    thinking: "Analyzing your data…",
+    roleUser: "You",
+    roleAssistant: "InfraGuard AI",
+    evidence: {
+      heading: "Sources",
+      assets: "Assets",
+      incidents: "Incidents",
+      audit: "Audit",
+      incident_timeline: "Incident timeline",
+      dashboard: "Infrastructure overview",
+      records: "{count} record",
+      recordsPlural: "{count} records",
+    },
+    card: {
+      viewAsset: "View asset",
+      viewIncident: "View incident",
+      viewAuditEvent: "View event",
+      openIncidents: "{count} open incident",
+      openIncidentsPlural: "{count} open incidents",
+      affectedAssets: "{count} affected asset",
+      affectedAssetsPlural: "{count} affected assets",
+    },
+    errors: {
+      loadConversations: "Couldn't load conversations.",
+      loadConversation: "Couldn't load the conversation.",
+      notFound: "This conversation does not exist or is not yours.",
+      send: "Couldn't send the message. Please try again.",
+      providerUnavailable: "The AI provider is unavailable right now. Please try again.",
+      providerTimeout: "The AI provider took too long to respond.",
+      rateLimited: "You've sent many messages. Please wait a moment and try again.",
+      forbidden: "You don't have permission to use the AI Assistant.",
+      unreachable: "Couldn't reach the server.",
+      retry: "Retry",
+    },
+    providerNotReady:
+      "The configured AI provider is not ready. The Assistant will answer once a "
+      + "valid API key is configured.",
+    askAiAsset: "Ask AI",
+    analyzeIncident: "Analyze with AI",
   },
 };
 

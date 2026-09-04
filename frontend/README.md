@@ -38,6 +38,9 @@ src/
 │   │                     AdminDetailWorkspace · AdminDetailPage · AdminDetailLoader ·
 │   │                     PermissionMatrix · RoleSelectDialog · RoleFormDialog · catalog
 │   ├── auth/             Forbidden · RequirePermission
+│   ├── ai/               AiWorkspace · ConversationRail · MessageBubble · Composer ·
+│   │                     SuggestedPrompts · EntityCard · EvidenceList · ContextBanner ·
+│   │                     AskAiButton · entityHref
 │   ├── theme/ · dashboard/
 │   ├── shell/            AppShell · AuthenticatedShell · Sidebar · SidebarFooter ·
 │   │                     Topbar · MobileNav · NavList · LogoutButton
@@ -502,13 +505,14 @@ allows; every guarded call is enforced server-side.
 `GET /auth/me` now returns `roles` + `permissions`. `AuthProvider` exposes
 `can(code)` / `canAny(codes)` / `canAll(codes)` (and the `usePermission` /
 `usePermissions` hooks) - **one source of truth**. Components check *permissions*,
-never role names. `src/lib/permissions.ts` holds the 16-code union type + the
-`hasPermission` helpers; `src/lib/navigation.ts` filters the sidebar.
+never role names. `src/lib/permissions.ts` holds the 17-code union type (incl.
+`ai.use`) + the `hasPermission` helpers; `src/lib/navigation.ts` filters the
+sidebar.
 
 - **401 vs 403** - `services/*` map `403` → a `forbidden` error kind, distinct
   from `401` (`unauthorized`). A `403` never redirects to `/login`.
 - **`<RequirePermission>`** wraps each module page (`/assets`, `/incidents`,
-  `/audit`, `/trash`, `/admin`) and renders **`<Forbidden>`** - *"No tienes
+  `/audit`, `/trash`, `/admin`, `/ai`) and renders **`<Forbidden>`** - *"No tienes
   permiso para acceder a esta sección."* + *"Volver al Dashboard"* - for a direct
   visit without the permission. Not an error, not a sign-in prompt.
 - **Action affordances** - "New asset / incident", inline edit pencils, lifecycle
@@ -535,7 +539,7 @@ registrado."*
 ### `/admin` module
 
 A sixth **active** nav item, **`Administration`** (English, between `Trash` and
-the disabled `AI Assistant`), permission-gated on
+`AI Assistant`), permission-gated on
 `users.read | users.manage | roles.read | roles.manage`.
 
 ```
@@ -586,6 +590,76 @@ the disabled `AI Assistant`), permission-gated on
 
 Token lifetime is unchanged (absolute 30-minute session; no refresh tokens).
 
+## AI Assistant (read-only intelligence - v1)
+
+A **seventh active** nav item, **`AI Assistant`** (`/ai`, `SparklesIcon`,
+permission-gated on `ai.use`) - a first-class workspace, **not** a floating chat
+bubble or a ChatGPT clone. It reuses the existing visual language (surfaces,
+spacing, typography, the primary accent, light/dark) with one restrained AI
+accent. **v1 is read-only**: nothing here mutates InfraGuard data.
+
+```
+components/ai/
+  AiWorkspace.tsx     stateful container: capabilities + conversations, ?c= / ?asset_id= / ?incident_id=,
+                      optimistic send + identity-based reconciliation, create-if-needed, delete, mobile rail Drawer
+  ConversationRail.tsx  "New conversation" + recent list (aria-current, hover-delete, skeleton, empty)
+  MessageBubble.tsx   user / assistant turn + entity-card grid + evidence strip + inline suggestion chips
+  Composer.tsx        auto-grow textarea, Enter=send / Shift+Enter=newline, char counter, no double-send
+  SuggestedPrompts.tsx  functional prompt buttons (global grid, or context-specific chips)
+  EntityCard.tsx      compact asset / incident / audit card → existing detail route (never re-implements it)
+  EvidenceList.tsx    "Fuentes" strip - which tools ran, over how many records
+  ContextBanner.tsx   "Contexto: prod-api-01" (+ a muted "no disponible" state)
+  AskAiButton.tsx     context entry point for asset / incident detail
+  entityHref.ts       entity → /assets|/incidents|/audit/{id}
+app/(app)/ai/page.tsx   RequirePermission "ai.use" → Suspense → AiWorkspace
+services/ai.ts + types/ai.ts   typed AIResult<T>, runtime guards, error-kind mapping
+```
+
+- **Layout.** Conversation rail + conversation + composer on desktop; on
+  narrow screens the rail is a `Drawer` opened from a header button, the
+  conversation is full-width and the composer stays reachable. No horizontal
+  overflow at 1920 / 1440 / 1024 / 768 / 390.
+- **Empty state.** *"¿Qué quieres investigar?"* + a short explainer + **functional**
+  suggested prompts (real buttons that send). A muted notice when
+  `capabilities.ready` is `false` (a real provider is configured but not ready) -
+  InfraGuard stays fully usable.
+- **History.** Create / see recent (most-recently-updated first) / reopen /
+  continue / delete (a `ConfirmDialog`, then a toast) / new. Titles come from the
+  backend (deterministic, no LLM).
+- **Grounding surfaced.** Each assistant turn renders its **evidence** (`EvidenceList`)
+  and **entity references** as compact cards; *"Ver activo" / "Ver incidente"*
+  navigate through the existing detail workspaces. Suggested follow-ups are
+  chips that send on click.
+- **Context entry points.** Asset detail → **"Preguntar a la IA"**, incident
+  detail → **"Analizar con IA"** (`AskAiButton`, hidden without `ai.use`).
+  Navigation carries only `?asset_id=<uuid>` / `?incident_id=<uuid>` - **never**
+  the entity object; the backend re-fetches and re-authorises, so a hand-edited
+  URL grants nothing. Opening does not auto-send a request; a `ContextBanner` +
+  context-specific prompts appear.
+- **Composer.** Multiline auto-grow, **Enter** sends / **Shift+Enter** newline,
+  a live character counter with a danger state past the limit, the send button
+  disabled while empty / over-limit / in-flight (no duplicate send), an
+  `aria-label`ed submit, a real `<label>` for the textarea.
+- **Optimistic reconciliation.** Sending shows **one** client-only optimistic
+  user bubble (a temporary id), rendered separately from the persisted list. On
+  success it is cleared and the canonical `user_message` + `assistant_message`
+  from the response take its place **exactly once** - the freshly created
+  conversation is held in state, never refetched mid-send (that refetch race was
+  what rendered the user message twice). Reconciliation is identity/position
+  based, never by comparing text, so two deliberately identical consecutive
+  messages both stay visible.
+- **Loading & failure.** A subtle "Analizando tus datos…" indicator + disabled
+  composer while a turn runs (no full-page spinner, no fake streaming). All
+  errors are Spanish and typed - `providerUnavailable` / `providerTimeout` /
+  `rateLimited` / `notFound` / `forbidden` / `unreachable`. A provider failure
+  keeps the optimistic user bubble on screen (dimmed) with an inline
+  **Reintentar**; the retry regenerates that turn - the backend sweeps its
+  dangling user message, so retrying never duplicates the user turn.
+- **`services/ai.ts`** - `AIResult<T>`, a 45 s request timeout, `credentials:
+  "include"`, runtime type guards, `503 {detail:{code}}` → `provider_timeout` /
+  `provider_unavailable`, `429` → `rate_limited`. No API key ever touches the
+  frontend.
+
 ## Auth screen
 
 `<AuthLayout>` is an **enterprise split** at `lg+` (~55/45): a deep, branded
@@ -623,7 +697,8 @@ Vitest + Testing Library, behaviour-focused. Covers the contextual theme toggle
 (dark default / switch / persistence, `matchMedia` mocked), the i18n provider
 (Spanish / interpolation / fallback), the single-card auth layout (no language
 switcher) and forms, the grouped sidebar (sections / active / `· soon` / footer),
-the mobile drawer (open / Escape / navigate-to-close), the **overlay** primitives
+the mobile drawer (open / Escape / navigate-to-close; `AI Assistant` active, no
+"Próximamente"), the **overlay** primitives
 (open/close/Escape/focus-restore/a11y + `ConfirmDialog`), **toast**
 (status vs alert / auto- & manual-dismiss), the confirmation-gated `LogoutButton`,
 the **Dashboard** (skeleton → KPI values + hrefs, chart card titles, error+retry,
@@ -660,3 +735,18 @@ role-selector open), `RoleDetailContent` (custom vs system / immutable notice /
 delete confirm + `409`-in-use), and `PermissionMatrix` (grouping / selection /
 readOnly). Existing component tests wrap in a synchronous `MockAuthProvider`
 (default Administrator; `VIEWER_USER` to scope).
+
+The **AI Assistant module**: the **Sidebar** (`AI Assistant` is an active `/ai`
+link for a holder, hidden without `ai.use`, **no "Próximamente"**), `AiWorkspace`
+(empty state + investigation prompt, create-from-suggested-prompt, evidence +
+entity card that links to `/assets/{id}`, Enter submits + **no duplicate send**
+while in flight, `ready:false` warning, rail list + selection updates `?c=`,
+delete `ConfirmDialog` → `deleteConversation`, context banner from an asset
+entry, not-found conversation state) and its **optimistic reconciliation**
+(user message renders **exactly once** when a new conversation is created - the
+conversation is not refetched mid-send; one pending bubble in flight; a
+deliberately repeated identical message shows **two** user turns;
+provider-unavailable keeps exactly one user bubble + offers retry; retry does
+**not** duplicate the user turn), `Composer` (Enter vs Shift+Enter, over-limit
+blocks send, disabled while sending), and `AskAiButton` (asset / incident label
++ `?asset_id=` / `?incident_id=` href, renders nothing without `ai.use`).

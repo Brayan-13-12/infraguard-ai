@@ -24,6 +24,7 @@ export const PERMISSIONS = [
   "users.manage",
   "roles.read",
   "roles.manage",
+  "ai.use",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -36,6 +37,7 @@ export const PERMISSION_GROUPS = [
   "trash",
   "users",
   "roles",
+  "ai",
 ] as const;
 
 export type PermissionGroup = (typeof PERMISSION_GROUPS)[number];
