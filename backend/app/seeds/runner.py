@@ -27,6 +27,7 @@ from app.models.asset import Asset
 from app.models.audit import AuditAction, AuditEntityType
 from app.models.incident import Incident, IncidentAsset
 from app.models.rbac import Role, UserRole
+from app.models.relationship import AssetRelationship
 from app.models.user import AccountStatus, User
 from app.seeds._common import (
     SEED_REQUEST_PREFIX,
@@ -38,6 +39,7 @@ from app.seeds._common import (
 )
 from app.seeds.assets import ASSET_SPECS, AssetSpec
 from app.seeds.incidents import INCIDENT_SPECS, IncidentSpec
+from app.seeds.relationships import RELATIONSHIP_SPECS, RelationshipSpec
 from app.seeds.timeline import build_timeline
 from app.services.audit import AuditContext, FieldChange, record_event
 from app.services.users import get_by_email
@@ -72,6 +74,8 @@ class SeedSummary:
     audit_events_created: int = 0
     access_requests_created: int = 0
     access_requests_existing: int = 0
+    asset_relationships_created: int = 0
+    asset_relationships_existing: int = 0
 
     def render(self) -> str:
         return "\n".join(
@@ -95,6 +99,11 @@ class SeedSummary:
                 f"Incident -> asset relationships: {self.relationships_created}",
                 f"Timeline events:                 {self.timeline_events_created}",
                 f"Audit events:                    {self.audit_events_created}",
+                "",
+                "Asset relationships (topology):",
+                f"  created:         {self.asset_relationships_created}",
+                f"  already present: {self.asset_relationships_existing}",
+                "  (run `docker compose run --rm sync-topology` to project into Neo4j)",
                 "",
                 "Access requests (pending):",
                 f"  created:         {self.access_requests_created}",
@@ -374,6 +383,63 @@ def _seed_incident(
 
 
 # --------------------------------------------------------------------------
+# Asset relationships (Topology milestone)
+# --------------------------------------------------------------------------
+
+
+def _seed_asset_relationship(
+    db: Session, spec: RelationshipSpec, *, ctx: AuditContext, now: datetime
+) -> tuple[bool, int]:
+    """Return ``(created, audit_events_written)``."""
+    rel_id = seed_uuid("asset_relationship", spec.key)
+    if db.get(AssetRelationship, rel_id) is not None:
+        return False, 0
+
+    source_id = seed_uuid("asset", spec.source_key)
+    target_id = seed_uuid("asset", spec.target_key)
+    source = db.get(Asset, source_id)
+    target = db.get(Asset, target_id)
+    if source is None or target is None:
+        raise SeedError(
+            f"relationship {spec.key!r} references an unknown asset key "
+            f"({spec.source_key!r} -> {spec.target_key!r})"
+        )
+
+    created_at = _clamp_past(days_ago(now, 90, key=spec.key), now)
+    rel = AssetRelationship(
+        id=rel_id,
+        source_asset_id=source.id,
+        target_asset_id=target.id,
+        relationship_type=spec.relationship_type,
+        description=spec.description,
+        created_by=None,
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    db.add(rel)
+    db.flush()
+
+    record_event(
+        db,
+        ctx=ctx,
+        action=AuditAction.CREATE,
+        entity_type=AuditEntityType.RELATIONSHIP,
+        entity_id=rel.id,
+        entity_label=f"{source.name} {spec.relationship_type} {target.name}",
+        metadata={
+            "relationship_type": spec.relationship_type,
+            "source_asset_id": str(source.id),
+            "source_asset_name": source.name,
+            "target_asset_id": str(target.id),
+            "target_asset_name": target.name,
+            "via": "seed-demo",
+        },
+        occurred_at=created_at,
+    )
+    return True, 1
+
+
+# --------------------------------------------------------------------------
 # Access requests
 # --------------------------------------------------------------------------
 
@@ -447,6 +513,15 @@ def run_seed(db: Session, *, now: datetime | None = None) -> SeedSummary:
             summary.incidents_existing += 1
         summary.relationships_created += rels
         summary.timeline_events_created += events
+        summary.audit_events_created += audit
+
+    db.flush()  # asset ids must exist before relationship rows can reference them
+    for spec in RELATIONSHIP_SPECS:
+        created, audit = _seed_asset_relationship(db, spec, ctx=ctx, now=now)
+        if created:
+            summary.asset_relationships_created += 1
+        else:
+            summary.asset_relationships_existing += 1
         summary.audit_events_created += audit
 
     req_created, req_existing, req_audit = _seed_access_requests(db, ctx=ctx, now=now)

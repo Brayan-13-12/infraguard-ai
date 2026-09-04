@@ -20,8 +20,20 @@ from app.services.ai.tools import (
 #: A read tool's verb (first name segment) is one of these - never a mutation.
 _READ_VERBS = {"search", "get", "summarize", "list", "count"}
 _MUTATION_VERBS = {
-    "create", "update", "delete", "restore", "resolve", "reopen", "approve",
-    "reject", "set", "add", "remove", "run", "exec", "write",
+    "create",
+    "update",
+    "delete",
+    "restore",
+    "resolve",
+    "reopen",
+    "approve",
+    "reject",
+    "set",
+    "add",
+    "remove",
+    "run",
+    "exec",
+    "write",
 }
 
 
@@ -38,7 +50,31 @@ def test_every_tool_is_read_only_and_permission_gated() -> None:
 
 def test_tool_permissions_are_only_read_domains() -> None:
     perms = {t.permission for t in REGISTRY.values()}
-    assert perms <= {"assets.read", "incidents.read", "audit.read"}
+    assert perms <= {"assets.read", "incidents.read", "audit.read", "relationships.read"}
+    for tool in REGISTRY.values():
+        assert all(p.endswith(".read") for p in tool.extra_permissions), tool.name
+
+
+def test_graph_tools_require_both_relationships_and_assets_read() -> None:
+    for name in ("get_asset_relationships", "get_asset_neighbors", "get_asset_impact"):
+        tool = REGISTRY[name]
+        assert tool.permission == "relationships.read"
+        assert "assets.read" in tool.extra_permissions
+
+    ex_neither = ToolExecutor(db=None, permissions=frozenset())
+    with pytest.raises(ToolPermissionError):
+        ex_neither.call(
+            "get_asset_relationships", {"asset_id": "00000000-0000-0000-0000-000000000000"}
+        )
+
+    ex_only_relationships = ToolExecutor(db=None, permissions=frozenset({"relationships.read"}))
+    with pytest.raises(ToolPermissionError):
+        ex_only_relationships.call(
+            "get_asset_impact", {"asset_id": "00000000-0000-0000-0000-000000000000"}
+        )
+
+    ex_only_assets = ToolExecutor(db=None, permissions=frozenset({"assets.read"}))
+    assert ex_only_assets.can("get_asset_neighbors") is False
 
 
 def test_input_models_forbid_unknown_fields() -> None:

@@ -36,8 +36,16 @@ def _assets_result(total: int, names: list[str]) -> ToolResult:
             "total": total,
             "returned": len(names),
             "assets": [
-                {"id": f"id-{n}", "name": n, "criticality": "Critical", "environment": "Production",
-                 "type": "Server", "status": "Operational", "is_active": True, "open_incidents": 0}
+                {
+                    "id": f"id-{n}",
+                    "name": n,
+                    "criticality": "Critical",
+                    "environment": "Production",
+                    "type": "Server",
+                    "status": "Operational",
+                    "is_active": True,
+                    "open_incidents": 0,
+                }
                 for n in names
             ],
         },
@@ -88,24 +96,131 @@ def test_asset_context_summary_uses_the_context_entity() -> None:
 
     p = DeterministicProvider(model="m")
     ctx = ResolvedContext(
-        type="asset", id="ctx-1", label="prod-api-01", available=True,
-        summary={"id": "ctx-1", "name": "prod-api-01", "criticality": "Critical",
-                 "environment": "Production", "type": "Server", "status": "Operational",
-                 "is_active": True, "owner": None},
+        type="asset",
+        id="ctx-1",
+        label="prod-api-01",
+        available=True,
+        summary={
+            "id": "ctx-1",
+            "name": "prod-api-01",
+            "criticality": "Critical",
+            "environment": "Production",
+            "type": "Server",
+            "status": "Operational",
+            "is_active": True,
+            "owner": None,
+        },
     )
-    ex = FakeExecutor({
-        "get_asset": ToolResult(
-            data={"found": True, "asset": {"name": "prod-api-01", "criticality": "Critical",
-                                           "environment": "Production", "type": "Server",
-                                           "status": "Operational", "is_active": True,
-                                           "open_incidents": 3, "owner": "SRE"}},
-            evidence=AIEvidenceItem(source="assets", label="Activo", count=1),
-            entities=[AIEntityRef(type="asset", id="ctx-1", label="prod-api-01")],
-        )
-    })
+    ex = FakeExecutor(
+        {
+            "get_asset": ToolResult(
+                data={
+                    "found": True,
+                    "asset": {
+                        "name": "prod-api-01",
+                        "criticality": "Critical",
+                        "environment": "Production",
+                        "type": "Server",
+                        "status": "Operational",
+                        "is_active": True,
+                        "open_incidents": 3,
+                        "owner": "SRE",
+                    },
+                },
+                evidence=AIEvidenceItem(source="assets", label="Activo", count=1),
+                entities=[AIEntityRef(type="asset", id="ctx-1", label="prod-api-01")],
+            )
+        }
+    )
     res = p.generate(_req("resume este activo", ex, context=ctx))
     assert "prod-api-01" in res.text
     assert "3" in res.text
+
+
+def _ctx(label: str = "prod-api-01"):
+    from app.services.ai.context import ResolvedContext
+
+    return ResolvedContext(
+        type="asset",
+        id="ctx-1",
+        label=label,
+        available=True,
+        summary={"id": "ctx-1", "name": label},
+    )
+
+
+def test_asset_context_dependencies_lists_outgoing_and_incoming() -> None:
+    p = DeterministicProvider(model="m")
+    ex = FakeExecutor(
+        {
+            "get_asset_relationships": ToolResult(
+                data={
+                    "found": True,
+                    "outgoing": [
+                        {
+                            "relationship_type": "depends_on",
+                            "other_asset": {"name": "prod-db-primary"},
+                        },
+                        {"relationship_type": "connects_to", "other_asset": {"name": "edge-fw-01"}},
+                    ],
+                    "incoming": [
+                        {"relationship_type": "depends_on", "other_asset": {"name": "prod-web-01"}},
+                    ],
+                },
+                evidence=AIEvidenceItem(source="relationships", label="Relaciones", count=3),
+            )
+        }
+    )
+    res = p.generate(_req("¿De qué depende este activo?", ex, context=_ctx()))
+    assert "prod-db-primary" in res.text
+    assert "prod-web-01" in res.text
+    assert "edge-fw-01" not in res.text  # connects_to is not a dependency relation
+    assert "get_asset_relationships" in ex.calls
+
+
+def test_asset_context_dependencies_permission_denied() -> None:
+    p = DeterministicProvider(model="m")
+    ex = FakeExecutor({}, denied={"get_asset_relationships"})
+    res = p.generate(_req("¿de qué depende?", ex, context=_ctx()))
+    assert "permiso" in res.text.lower()
+
+
+def test_asset_context_impact_lists_affected_assets() -> None:
+    p = DeterministicProvider(model="m")
+    ex = FakeExecutor(
+        {
+            "get_asset_impact": ToolResult(
+                data={
+                    "found": True,
+                    "affected_assets": [
+                        {"name": "prod-api-01", "distance": 1},
+                        {"name": "prod-web-01", "distance": 2},
+                    ],
+                },
+                evidence=AIEvidenceItem(source="topology", label="Impacto potencial", count=2),
+            )
+        }
+    )
+    res = p.generate(
+        _req("¿Qué podría verse afectado si falla?", ex, context=_ctx("prod-db-primary"))
+    )
+    assert "prod-api-01" in res.text
+    assert "prod-web-01" in res.text
+    assert "2" in res.text
+
+
+def test_asset_context_impact_no_affected_assets_is_reassuring_not_empty() -> None:
+    p = DeterministicProvider(model="m")
+    ex = FakeExecutor(
+        {
+            "get_asset_impact": ToolResult(
+                data={"found": True, "affected_assets": []},
+                evidence=AIEvidenceItem(source="topology", label="Impacto potencial", count=0),
+            )
+        }
+    )
+    res = p.generate(_req("impacto potencial si falla", ex, context=_ctx()))
+    assert "ningún activo depende" in res.text.lower()
 
 
 def test_unavailable_context_is_reported() -> None:

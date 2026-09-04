@@ -4,6 +4,8 @@ import {
   BoxIcon,
   HistoryIcon,
   LayoutIcon,
+  LinkIcon,
+  NetworkIcon,
   SettingsIcon,
   ShieldIcon,
   SparklesIcon,
@@ -17,7 +19,9 @@ export type NavStatus = "active" | "soon";
 export interface NavItem {
   /**
    * Product / module name - always English, never translated (proper nouns for
-   * the platform's areas, consistent across locales).
+   * the platform's areas, consistent across locales). Exception: `Dependencias`
+   * is deliberately Spanish (matching the Asset-detail tab of the same name)
+   * per an explicit product decision for this module.
    */
   label: string;
   href: string;
@@ -32,10 +36,9 @@ export interface NavItem {
 }
 
 /**
- * A single, flat navigation list - no visible section headings. Dashboard,
- * Assets, Incidents, Audit, Trash and Administration are real routes; AI
- * Assistant and Settings are shown as `aria-disabled` (not navigable) with a
- * quiet lock marker + "Próximamente" tooltip.
+ * A single, flat navigation list - no visible section headings. Every item is
+ * a real route except `Settings`, shown as `aria-disabled` (not navigable)
+ * with a quiet lock marker + "Próximamente" tooltip.
  *
  * Items with a `permission` are filtered out by {@link visibleNavItems} for
  * users whose roles do not grant it.
@@ -55,6 +58,23 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ShieldIcon,
     status: "active",
     permission: "incidents.read",
+  },
+  {
+    label: "Dependencias",
+    href: "/dependencies",
+    icon: LinkIcon,
+    status: "active",
+    permission: "relationships.read",
+  },
+  {
+    label: "Topology",
+    href: "/topology",
+    icon: NetworkIcon,
+    status: "active",
+    // The backend additionally requires assets.read (§49) - every system role
+    // that grants relationships.read already grants assets.read alongside it,
+    // so this stays a single-permission visibility hint like every other item.
+    permission: "relationships.read",
   },
   {
     label: "Audit",

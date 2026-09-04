@@ -50,6 +50,7 @@ from app.schemas.trash import (
     TrashSummary,
 )
 from app.services.audit import AuditContext, record_event
+from app.services.graph import sync as graph_sync
 from app.services.trash import (
     TrashAssetQuery,
     TrashIncidentQuery,
@@ -202,6 +203,7 @@ def restore_asset_endpoint(
         entity_label=asset.name,
     )
     db.commit()
+    graph_sync.upsert_asset(asset)  # best-effort - un-hides it + its edges in Neo4j
     return MessageResponse(detail="Asset restored")
 
 

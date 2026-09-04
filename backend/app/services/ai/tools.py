@@ -33,6 +33,7 @@ from app.models.incident import (
     IncidentSeverity,
     IncidentStatus,
 )
+from app.models.relationship import RELATIONSHIP_TYPE_CATALOG
 from app.schemas.ai import AIEntityRef, AIEvidenceItem
 from app.services.assets import AssetQuery, get_asset, get_asset_summary, list_assets
 from app.services.audit import (
@@ -46,6 +47,8 @@ from app.services.incidents import (
     get_incident_summary,
     list_incidents,
 )
+from app.services.relationships import grouped_for_asset
+from app.services.topology import compute_impact, get_subgraph
 
 _LIMIT = settings.AI_MAX_TOOL_RESULTS
 _QUERY_MAX = 120
@@ -214,6 +217,27 @@ class SearchAuditInput(BaseModel):
 class GetAuditEventInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     event_id: uuid.UUID
+
+
+class GetAssetRelationshipsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    asset_id: uuid.UUID
+
+
+class GetAssetNeighborsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    asset_id: uuid.UUID
+    #: Kept small for AI grounding (data minimization) - the interactive
+    #: topology workspace uses the dedicated /topology/subgraph endpoint for
+    #: deeper exploration.
+    depth: int = Field(default=1, ge=1, le=2)
+    direction: str = Field(default="both", pattern="^(both|upstream|downstream)$")
+
+
+class GetAssetImpactInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    asset_id: uuid.UUID
+    max_depth: int = Field(default=2, ge=1, le=3)
 
 
 # --------------------------------------------------------------------------
@@ -419,6 +443,113 @@ def _t_get_audit_event(db: Session, p: GetAuditEventInput) -> ToolResult:
     )
 
 
+def _relationship_dict(rel, other: Asset, *, this_is_source: bool) -> dict[str, Any]:
+    meta = RELATIONSHIP_TYPE_CATALOG.get(rel.relationship_type)
+    return {
+        "id": str(rel.id),
+        "relationship_type": rel.relationship_type,
+        "label": meta.label_es
+        if (this_is_source and meta)
+        else (meta.inverse_label_es if meta else rel.relationship_type),
+        "direction": "outgoing" if this_is_source else "incoming",
+        "other_asset": _asset_dict(other),
+    }
+
+
+def _t_get_asset_relationships(db: Session, p: GetAssetRelationshipsInput) -> ToolResult:
+    """This asset's own relationships, grouped by direction - the same data the
+    Dependencias tab shows."""
+    asset = get_asset(db, p.asset_id)
+    if asset is None or asset.deleted_at is not None:
+        return ToolResult(
+            data={"found": False, "asset_id": str(p.asset_id)},
+            evidence=AIEvidenceItem(source="relationships", label="Relaciones", count=0),
+        )
+    outgoing, incoming = grouped_for_asset(db, asset.id)
+    out_items = [
+        _relationship_dict(rel, target, this_is_source=True) for rel, _src, target in outgoing
+    ]
+    in_items = [
+        _relationship_dict(rel, source, this_is_source=False) for rel, source, _tgt in incoming
+    ]
+    total = len(out_items) + len(in_items)
+    return ToolResult(
+        data={
+            "found": True,
+            "asset": _asset_dict(asset),
+            "outgoing": out_items[:_LIMIT],
+            "incoming": in_items[:_LIMIT],
+            "counts": {"outgoing": len(out_items), "incoming": len(in_items), "total": total},
+        },
+        evidence=AIEvidenceItem(source="relationships", label="Relaciones", count=total),
+        entities=[_asset_entity(asset)]
+        + [_asset_entity(target) for _rel, _src, target in outgoing[:8]]
+        + [_asset_entity(source) for _rel, source, _tgt in incoming[:8]],
+    )
+
+
+def _t_get_asset_neighbors(db: Session, p: GetAssetNeighborsInput) -> ToolResult:
+    """Bounded topology neighborhood - a small, grounded slice of the graph
+    (never the full topology; the interactive workspace covers that)."""
+    result = get_subgraph(
+        db, root_asset_id=p.asset_id, depth=p.depth, direction=p.direction, node_cap=40
+    )
+    if result is None:
+        return ToolResult(
+            data={"found": False, "asset_id": str(p.asset_id)},
+            evidence=AIEvidenceItem(source="topology", label="Vecinos del activo", count=0),
+        )
+    neighbors = [a for a in result.nodes if a.id != result.root.id]
+    return ToolResult(
+        data={
+            "found": True,
+            "root": _asset_dict(result.root),
+            "depth": result.depth,
+            "direction": result.direction,
+            "neighbors": [_asset_dict(a) for a in neighbors],
+            "edges": [
+                {
+                    "relationship_type": e.relationship_type,
+                    "source_asset_id": str(e.source_asset_id),
+                    "target_asset_id": str(e.target_asset_id),
+                }
+                for e in result.edges
+            ],
+            "truncated": result.truncated,
+        },
+        evidence=AIEvidenceItem(
+            source="topology", label="Vecinos del activo", count=len(neighbors)
+        ),
+        entities=[_asset_entity(result.root)] + [_asset_entity(a) for a in neighbors[:10]],
+    )
+
+
+def _t_get_asset_impact(db: Session, p: GetAssetImpactInput) -> ToolResult:
+    """Downstream impact traversal - only relationship types that propagate a
+    failure are followed (see app/models/relationship.py)."""
+    result = compute_impact(db, root_asset_id=p.asset_id, max_depth=p.max_depth, node_cap=40)
+    if result is None:
+        return ToolResult(
+            data={"found": False, "asset_id": str(p.asset_id)},
+            evidence=AIEvidenceItem(source="topology", label="Impacto potencial", count=0),
+        )
+    affected = result.affected
+    return ToolResult(
+        data={
+            "found": True,
+            "root": _asset_dict(result.root),
+            "max_depth": result.max_depth,
+            "truncated": result.truncated,
+            "affected_assets": [
+                {**_asset_dict(item.asset), "distance": item.distance} for item in affected
+            ],
+        },
+        evidence=AIEvidenceItem(source="topology", label="Impacto potencial", count=len(affected)),
+        entities=[_asset_entity(result.root)]
+        + [_asset_entity(item.asset) for item in affected[:10]],
+    )
+
+
 def _t_get_dashboard_overview(db: Session, _p: _NoArgs) -> ToolResult:
     """Combined asset + incident snapshot. Registered under ``assets.read``;
     a caller who also holds ``incidents.read`` gets the incident half too."""
@@ -445,6 +576,14 @@ class Tool:
     permission: str
     input_model: type[BaseModel]
     run: Callable[[Session, Any], ToolResult]
+    #: Additional permissions required alongside ``permission`` (all must be
+    #: held). Used by the topology-aware tools, which read both relationship
+    #: and asset data (§62) - kept as a short tuple rather than a second
+    #: permission system so most tools stay untouched.
+    extra_permissions: tuple[str, ...] = ()
+
+    def required_permissions(self) -> tuple[str, ...]:
+        return (self.permission, *self.extra_permissions)
 
 
 REGISTRY: dict[str, Tool] = {
@@ -520,6 +659,30 @@ REGISTRY: dict[str, Tool] = {
             _NoArgs,
             _t_get_dashboard_overview,
         ),
+        Tool(
+            "get_asset_relationships",
+            "Get one asset's own relationships (what it depends on / what depends on it, etc.).",
+            "relationships.read",
+            GetAssetRelationshipsInput,
+            _t_get_asset_relationships,
+            extra_permissions=("assets.read",),
+        ),
+        Tool(
+            "get_asset_neighbors",
+            "Get a bounded topology neighborhood (1-2 hops) around one asset.",
+            "relationships.read",
+            GetAssetNeighborsInput,
+            _t_get_asset_neighbors,
+            extra_permissions=("assets.read",),
+        ),
+        Tool(
+            "get_asset_impact",
+            "Downstream impact traversal: what could be affected if this asset fails.",
+            "relationships.read",
+            GetAssetImpactInput,
+            _t_get_asset_impact,
+            extra_permissions=("assets.read",),
+        ),
     )
 }
 
@@ -545,18 +708,23 @@ class ToolExecutor:
         self.calls: list[ToolCall] = []
 
     def available(self) -> list[Tool]:
-        return [t for t in REGISTRY.values() if t.permission in self._permissions]
+        return [
+            t
+            for t in REGISTRY.values()
+            if all(p in self._permissions for p in t.required_permissions())
+        ]
 
     def can(self, name: str) -> bool:
         tool = REGISTRY.get(name)
-        return tool is not None and tool.permission in self._permissions
+        return tool is not None and all(p in self._permissions for p in tool.required_permissions())
 
     def call(self, name: str, params: dict[str, Any] | None = None) -> ToolResult:
         tool = REGISTRY.get(name)
         if tool is None:
             raise UnknownToolError(f"unknown tool {name!r}")
-        if tool.permission not in self._permissions:
-            raise ToolPermissionError(name, tool.permission)
+        for required in tool.required_permissions():
+            if required not in self._permissions:
+                raise ToolPermissionError(name, required)
         try:
             validated = tool.input_model.model_validate(params or {})
         except ValidationError as exc:

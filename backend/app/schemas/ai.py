@@ -38,7 +38,9 @@ MAX_PAGE_SIZE = 100
 DEFAULT_PAGE_SIZE = 30
 
 EntityType = Literal["asset", "incident", "audit_event"]
-EvidenceSource = Literal["assets", "incidents", "audit", "incident_timeline", "dashboard"]
+EvidenceSource = Literal[
+    "assets", "incidents", "audit", "incident_timeline", "dashboard", "relationships", "topology"
+]
 
 
 class MessageResponse(BaseModel):

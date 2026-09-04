@@ -29,6 +29,7 @@ const MODULE_LABELS = [
   "Incidents",
   "Audit",
   "Trash",
+  "Topology",
   "Administration",
   "AI Assistant",
   "Settings",
@@ -174,6 +175,13 @@ describe("Sidebar", () => {
     for (const label of MODULE_LABELS) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+  });
+
+  it("shows the Dependencias module - a deliberate Spanish exception to the English-labels rule", async () => {
+    renderSidebar();
+    await screen.findByText("Administration");
+    const link = screen.getByRole("link", { name: "Dependencias" });
+    expect(link).toHaveAttribute("href", "/dependencies");
   });
 
   it("carries the identity, theme toggle and a sign-out control in the footer (no language switcher)", async () => {

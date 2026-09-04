@@ -7,16 +7,18 @@
 #   docker compose run --rm bootstrap     # create the first Administrator
 #                                         # (set BOOTSTRAP_ADMIN_* in .env first)
 #   docker compose run --rm seed-demo     # load the curated demo dataset (idempotent)
+#   docker compose run --rm sync-topology # project canonical relationships into Neo4j (idempotent)
 #
 # ---------------------------------------------------------------------------
 # DATABASE SAFETY - read before touching volumes
 # ---------------------------------------------------------------------------
-#   `infraguard-ai_pgdata` is PERSISTENT development data. Treat it as user-owned.
+#   `infraguard-ai_pgdata` and `infraguard-ai_neo4j_data` are PERSISTENT
+#   development data. Treat both as user-owned.
 #
 #   SAFE:      docker compose down            (stops/removes containers, keeps data)
 #              docker compose stop
-#   FORBIDDEN: docker compose down -v         (DESTROYS pgdata - never for dev)
-#              docker volume rm infraguard-ai_pgdata
+#   FORBIDDEN: docker compose down -v         (DESTROYS pgdata/neo4j_data - never for dev)
+#              docker volume rm infraguard-ai_pgdata / infraguard-ai_neo4j_data
 #              docker volume prune / docker system prune --volumes
 #
 #   Regenerate demo data with `docker compose run --rm seed-demo` - NEVER by
@@ -31,12 +33,21 @@
 #   Liveness  -> http://localhost:8000/api/v1/health/live
 #   Readiness -> http://localhost:8000/api/v1/health/ready
 #
+# Neo4j is a DERIVED graph projection, never the system of record (PostgreSQL
+# `asset_relationships` is canonical - see backend/app/services/topology.py).
+# Like `db`, it publishes no host port (backend-only, reached at `neo4j:7687`
+# inside the `data` network). `docker compose up -d` starts it by default for
+# a complete local stack, but nothing else in InfraGuard depends on it being
+# healthy: relationship CRUD, the topology API and the rest of the platform
+# work identically with Neo4j stopped, unreachable, or removed from this file
+# entirely - see "Neo4j" in README.md for the exact fallback behavior.
+#
 # Network segmentation (least privilege):
 #
-#   Browser ──▶ frontend ──[edge]──▶ backend ──[data]──▶ db
+#   Browser ──▶ frontend ──[edge]──▶ backend ──[data]──▶ db / neo4j
 #
-#   - frontend joins ONLY `edge`  -> it cannot reach PostgreSQL
-#   - db       joins ONLY `data`  -> internal, no outbound internet
+#   - frontend joins ONLY `edge`  -> it cannot reach PostgreSQL or Neo4j
+#   - db, neo4j join ONLY `data`  -> internal, no outbound internet
 #   - backend  joins BOTH         -> the only bridge between tiers
 #   - migrate  joins ONLY `data`  -> one-shot; applies Alembic migrations
 #
@@ -71,6 +82,15 @@ x-backend-env: &backend-env
   # logins from a single Docker-gateway IP, so it raises the ceiling via env.
   AUTH_RATE_LIMIT_MAX_ATTEMPTS: ${AUTH_RATE_LIMIT_MAX_ATTEMPTS:-10}
   AUTH_RATE_LIMIT_WINDOW_SECONDS: ${AUTH_RATE_LIMIT_WINDOW_SECONDS:-60}
+  # --- Neo4j graph projection (Asset Relationships & Topology milestone) ---
+  # A DERIVED projection only - PostgreSQL `asset_relationships` is canonical.
+  # Points at the `neo4j` service below by default; unset NEO4J_URI (or stop /
+  # remove that service) and every other part of InfraGuard - including
+  # relationship CRUD and the topology API - keeps working unchanged.
+  NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
+  NEO4J_USERNAME: ${NEO4J_USERNAME:-neo4j}
+  NEO4J_PASSWORD: ${NEO4J_PASSWORD:-change_me_for_local_development}
+  NEO4J_DATABASE: ${NEO4J_DATABASE:-neo4j}
   # --- Bootstrap Administrator (Governance Phase 3) ---
   # Consumed only by the one-shot `bootstrap` job below. Public registration
   # never creates an Administrator; this is the sole deterministic path.
@@ -106,6 +126,59 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    networks:
+      - data
+
+  # DERIVED graph projection (Asset Relationships & Topology milestone) - see
+  # backend/app/services/graph/. PostgreSQL `asset_relationships` remains
+  # canonical; nothing else in this Compose file waits on this service being
+  # healthy, and the backend degrades gracefully (typed "unavailable" /
+  # "not_configured" status, no broken feature) if it is stopped or removed.
+  neo4j:
+    <<: *hardening
+    image: neo4j:5.26.0-community@sha256:5a015e53de1895e7eee1574ae0325cf8c4b89587222778108c594bdd45a474b5
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-change_me_for_local_development}
+      # Community edition supports exactly one database - kept in step with
+      # NEO4J_DATABASE in x-backend-env above.
+      NEO4J_dbms_security_auth__minimum__password__length: "8"
+    volumes:
+      - neo4j_data:/data
+    tmpfs:
+      - /logs
+      - /var/lib/neo4j/import
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:7474 || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - data
+
+  # One-shot: rebuild the Neo4j graph projection from canonical PostgreSQL
+  # data. Idempotent (upsert + prune of InfraGuard-managed nodes/edges only).
+  #   docker compose run --rm sync-topology
+  sync-topology:
+    <<: *hardening
+    build:
+      context: ./backend
+    profiles: ["sync-topology"]
+    restart: "no"
+    command: ["python", "-m", "app.scripts.sync_topology"]
+    environment: *backend-env
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - data
 
@@ -263,6 +336,8 @@ volumes:
   pgdata:
   # Throwaway - only the `db-test` profile writes here. Safe to `down -v`.
   pgdata_test:
+  # Persistent Neo4j graph projection - same safety rules as `pgdata`.
+  neo4j_data:
 
 networks:
   edge:

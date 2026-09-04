@@ -91,3 +91,18 @@ export const AUDIT_MAX_PAGE_SIZE = 100;
 /** Password policy - mirrors the backend (app/core/config.py). */
 export const PASSWORD_MIN_LENGTH = 12;
 export const PASSWORD_MAX_LENGTH = 128;
+
+/** Asset relationships API (Asset Relationships & Topology milestone). */
+export const RELATIONSHIPS_ENDPOINT = `${v1}/relationships`;
+export const RELATIONSHIPS_PAGE_SIZE = 50;
+export const RELATIONSHIPS_MAX_PAGE_SIZE = 100;
+export const RELATIONSHIP_DESCRIPTION_MAX_LENGTH = 500;
+/** The global Dependencias module's list page size - denser than the default. */
+export const DEPENDENCIES_PAGE_SIZE = 20;
+
+/** Bounded graph/topology query API. */
+export const TOPOLOGY_ENDPOINT = `${v1}/topology`;
+export const TOPOLOGY_DEFAULT_DEPTH = 1;
+export const TOPOLOGY_MAX_DEPTH = 3;
+export const TOPOLOGY_DEFAULT_NODE_CAP = 200;
+export const TOPOLOGY_MAX_NODES = 500;

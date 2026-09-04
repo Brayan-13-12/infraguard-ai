@@ -146,6 +146,20 @@ class Settings(BaseSettings):
     AI_RATE_LIMIT_MAX_MESSAGES: int = Field(default=20, gt=0)
     AI_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60, gt=0)
 
+    # --- Neo4j graph projection (Asset Relationships & Topology milestone) ---
+    # PostgreSQL (``asset_relationships``) is the canonical source of truth;
+    # Neo4j is a DERIVED projection used for graph sync/health and future
+    # graph-native querying - the v1 topology API itself is answered entirely
+    # from PostgreSQL (see app/services/topology.py) and never blocks on Neo4j.
+    # Leaving NEO4J_URI unset means "not configured": sync becomes a no-op and
+    # the rest of InfraGuard is completely unaffected.
+    NEO4J_URI: str | None = None
+    NEO4J_USERNAME: str = "neo4j"
+    NEO4J_PASSWORD: str | None = None
+    NEO4J_DATABASE: str = "neo4j"
+    #: Hard ceiling on a single Neo4j driver call (seconds).
+    NEO4J_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0, le=60)
+
     # --- Bootstrap Administrator (Governance Phase 3) ---
     # Credentials for the explicit `python -m app.scripts.bootstrap_admin` command
     # (and the `bootstrap` compose one-shot). Used ONLY by that command - never on

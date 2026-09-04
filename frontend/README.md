@@ -19,9 +19,10 @@ src/
 ├── app/
 │   ├── (app)/            authenticated route group - layout.tsx = RequireAuth + AppShell
 │   │   ├── dashboard/
-│   │   └── assets/       layout.tsx renders {children}{modal}
-│   │       ├── page.tsx  [id]/ [id]/edit/ new/           full-page fallbacks
-│   │       └── @modal/   (.)[id]/ (.)[id]/edit/ (.)new/  intercepted drawers + default.tsx
+│   │   ├── assets/       layout.tsx renders {children}{modal}
+│   │   │   ├── page.tsx  [id]/ [id]/edit/ new/           full-page fallbacks
+│   │   │   └── @modal/   (.)[id]/ (.)[id]/edit/ (.)new/  intercepted drawers + default.tsx
+│   │   └── topology/     page.tsx - dedicated workspace, `?asset_id=` deep link
 │   ├── login · register · page.tsx (landing) · healthz
 ├── components/
 │   ├── ui/               design system (Button, Input, Select, Textarea, Card,
@@ -50,9 +51,16 @@ src/
 │   │                     AssetDetailWorkspace · AssetCreateWorkspace ·
 │   │                     AssetDetailLoader · AssetDrawerShell · AssetEditDrawer · AssetBadges · catalog
 │   │   ui/               Tabs · DetailRow · FieldEditDialog · WorkspaceDialog  (shared detail primitives)
+│   │   relationships/    AssetDependenciesTab · RelationshipItem · RelationshipAssetPicker ·
+│   │                     AddRelationshipDialog · EditRelationshipDialog · catalog
+│   ├── topology/         TopologyWorkspace · TopologyCanvas (React Flow) · AssetNode ·
+│   │                     RelationshipEdge · layout (dagre) · TopologyFilters · TopologySearch ·
+│   │                     TopologyList (accessible list view) · NodeInspector · EdgeInspector ·
+│   │                     EmptyTopology
 │   ├── AuthProvider · RequireAuth · AuthForm · AuthNav · Brand · SystemHealth
 ├── hooks/                useCloseDrawer
-├── i18n/ · lib/ (cn · config · navigation · permissions · motion · *Refresh) · services/ · types/ · test/ (fixtures · MockAuthProvider)
+├── i18n/ · lib/ (cn · config · navigation · permissions · motion · *Refresh) ·
+│   services/ (…, relationships, topology) · types/ · test/ (fixtures · MockAuthProvider)
 ```
 
 ## Internationalisation (Spanish-only visible UI)
@@ -660,6 +668,86 @@ services/ai.ts + types/ai.ts   typed AIResult<T>, runtime guards, error-kind map
   `provider_unavailable`, `429` → `rate_limited`. No API key ever touches the
   frontend.
 
+## Asset Relationships & Topology
+
+An **eighth active** nav item, **`Topology`** (`NetworkIcon`, between Trash and
+Administration, gated on `relationships.read`) alongside a new
+**"Dependencias"** tab on Asset detail (final tab order: Resumen, Información
+técnica, Incidentes, Dependencias, Actividad). The frontend **never** talks to
+Neo4j directly - no driver, no credentials, no Cypher; every graph read/write
+goes through the InfraGuard backend.
+
+- **Dependencias tab** (`AssetDependenciesTab`) - relationships grouped by
+  type into labeled sections (in taxonomy order) rather than one flat table; a
+  restrained summary line (*"4 salientes · 7 entrantes · 11 relaciones"*, no
+  KPI cards); each row (`RelationshipItem`) shows the other Asset's name /
+  type / criticality / status and links straight into the existing Asset
+  detail route - **no duplicated detail view**; a "Ver topología" link
+  (top + bottom) into `/topology?asset_id=<id>`; an empty state with an
+  inline Add affordance.
+- **`RelationshipAssetPicker`** - a single-select sibling of the existing
+  multi-select `IncidentAssetPicker`: debounced server-side search, an
+  initial batch + **"Mostrar más"** pagination (20 at a time - never all
+  Assets in one giant `<select>`), excludes the source Asset, shows
+  name/type/environment/criticality/status, a clearly-visible selected state.
+- **`AddRelationshipDialog`** / **`EditRelationshipDialog`** - centered
+  dialogs (fixed source, type select, the picker, optional description /
+  type + description only, respectively); typed error mapping
+  (`RelationshipError.kind` incl. `duplicate` / `asset_trashed` /
+  `validation`) surfaces inline without closing the dialog. Delete goes
+  through the existing `ConfirmDialog` pattern with an illustrative body
+  (*"prod-api-01 dejará de depender de prod-db-primary."*).
+- **`/topology`** (`TopologyWorkspace`) - a dedicated, permission-gated
+  workspace, not a sub-view of Asset detail (topology is a platform
+  capability): a toolbar (search, collapsible filters, fit/reset, list-view
+  toggle), the graph canvas, and a node/edge inspector (desktop: persistent
+  `<aside>`; mobile: a `Drawer side="bottom"` sheet). `?asset_id=` deep-links
+  a focused Asset; selecting a search result or an inspector action updates
+  it via `router.replace` (URL stays shareable).
+- **Graph library: `@xyflow/react` (React Flow) + `@dagrejs/dagre`** - the
+  **only** graph library added, chosen for first-class React integration,
+  custom node/edge component support, built-in pan/zoom/`Controls`, and to
+  keep the bundle impact isolated to the `/topology` route chunk (dagre
+  supplies deterministic left-to-right layout, which React Flow itself does
+  not include). `TopologyCanvas` wraps it: `AssetNode` (neutral surface +
+  criticality-accent left border + a status dot + a type icon - **not** one
+  bright color per Asset type, reusing the same `CRITICALITY_TONE` /
+  `STATUS_TONE` semantic tokens that already power `Badge`) and
+  `RelationshipEdge` (direction arrow, an always-visible small type label,
+  dashed styling for the two non-propagating types) are custom React Flow
+  node/edge components; selecting a node dims (`faded`) everything that
+  isn't a direct neighbor.
+- **`TopologyList`** - the accessibility-equivalent **"Lista"** view: every
+  node as a real focusable `<button>` with its relationships as plain text
+  underneath and `aria-current` on selection - a fallback for keyboard/
+  screen-reader users and for when a dense graph is simply hard to parse
+  visually, per the "not color-only" accessibility requirement.
+- **`NodeInspector`** - name/type/environment/criticality/status, incoming
+  /outgoing counts, an inline **read-only "Impacto potencial"** mini-panel
+  (fetches `getAssetImpact` for the selected node), and actions: **Ver
+  activo** (links to the real Asset detail route), **Centrar**, **Expandir
+  vecinos** (merges the response into the existing graph by stable id -
+  never a full refetch).
+- **`EdgeInspector`** - source / type / target / description, with inline
+  **Editar** / **Eliminar** for a `relationships.manage` holder - **no
+  navigating away** required, reusing `EditRelationshipDialog` and
+  `ConfirmDialog`.
+- **`TopologyFilters`** - a collapsible popover (environment / criticality /
+  status / relationship type / direction / depth), never a permanent form
+  covering the canvas; an active-filter count badge.
+- **`services/topology.ts`** - `getSubgraph` / `getAssetImpact` / `getPath` /
+  `getGraphHealth`, a 10 s request timeout, typed `TopologyResult<T>` +
+  runtime guards. A `truncated: true` response surfaces as an inline
+  `Alert` (*"Se muestran los primeros elementos. Ajusta los filtros o
+  enfoca un activo…"*), never a silently incomplete graph.
+- **Empty / degraded states** - no focused Asset → search-first empty state;
+  a focused Asset with no relationships → *"No hay topología disponible
+  para este activo."*; **never a broken empty canvas**. If the backend
+  reports Neo4j `unavailable`, relationship management and the
+  PostgreSQL-backed topology queries are unaffected - only a health
+  indicator would change, since the topology *read* path never depended on
+  Neo4j to begin with.
+
 ## Auth screen
 
 `<AuthLayout>` is an **enterprise split** at `lg+` (~55/45): a deep, branded
@@ -750,3 +838,23 @@ provider-unavailable keeps exactly one user bubble + offers retry; retry does
 **not** duplicate the user turn), `Composer` (Enter vs Shift+Enter, over-limit
 blocks send, disabled while sending), and `AskAiButton` (asset / incident label
 + `?asset_id=` / `?incident_id=` href, renders nothing without `ai.use`).
+
+The **Asset Relationships & Topology module**: `AssetDependenciesTab` (empty
+state with an Add affordance, grouped outgoing/incoming rendering with correct
+Spanish headings + an asset-link `href`, the full create-via-dialog flow, an
+inline duplicate-error that keeps the dialog open, edit, delete-with-confirm,
+every manage affordance hidden for a `relationships.read`-only user, and the
+"Ver topología" link's href) and `TopologyWorkspace` (the no-focus empty
+state, a loading state, loading + rendering a subgraph for a focused asset,
+selecting a node shows the inspector with its counts + actions, selecting an
+edge shows source/type/target/description, **expanding neighbors merges new
+nodes without refetching everything**, searching + selecting an asset focuses
+it and updates the URL, changing a filter re-fetches with it applied, the
+truncated-result warning, toggling to the accessible list view and selecting
+a node from it, a not-found empty state, and an inline error with a working
+retry). Per the "mock heavy graph rendering only where necessary" guidance,
+`TopologyCanvas` (the actual React Flow surface) is replaced with a minimal
+stand-in exposing the same props contract, so these tests exercise
+`TopologyWorkspace`'s real orchestration - fetch, selection, expand, filters,
+list-view toggle - without depending on React Flow's internals or asserting
+on rendered graph pixels.
