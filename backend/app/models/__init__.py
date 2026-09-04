@@ -5,6 +5,9 @@
   business-domain entity.
 * Incidents milestone (v0.5) - ``Incident``, the ``incident_assets`` association
   and the ``IncidentEvent`` timeline.
+* Asset Relationships & Topology milestone - ``AssetRelationship``, the
+  canonical directed edge between two Assets (PostgreSQL is authoritative;
+  Neo4j is a derived projection - see ``app/services/graph/``).
 """
 
 from app.models.ai import (
@@ -41,6 +44,7 @@ from app.models.rbac import (
     RolePermission,
     UserRole,
 )
+from app.models.relationship import AssetRelationship, RelationshipType
 from app.models.user import AccountStatus, User
 
 __all__ = [
@@ -50,6 +54,7 @@ __all__ = [
     "AIMessageRole",
     "AccountStatus",
     "Asset",
+    "AssetRelationship",
     "AssetStatus",
     "AssetType",
     "AuditAction",
@@ -66,6 +71,7 @@ __all__ = [
     "IncidentSeverity",
     "IncidentStatus",
     "Permission",
+    "RelationshipType",
     "Role",
     "RolePermission",
     "User",

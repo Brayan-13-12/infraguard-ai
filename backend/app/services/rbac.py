@@ -70,6 +70,18 @@ PERMISSION_CATALOG: tuple[PermissionDef, ...] = (
     # AI Assistant (read-only intelligence; each AI tool still enforces the
     # underlying domain permission - ``ai.use`` alone grants no data access).
     PermissionDef("ai.use", "ai", "Use the AI Assistant to ask about infrastructure data"),
+    # Asset relationships & topology (kept distinct from assets.* - topology is
+    # its own capability and will back future AI / impact-analysis features).
+    PermissionDef(
+        "relationships.read",
+        "relationships",
+        "View asset relationships and the topology graph",
+    ),
+    PermissionDef(
+        "relationships.manage",
+        "relationships",
+        "Create, edit and delete asset relationships",
+    ),
 )
 
 #: Ordered groups for the frontend permission matrix.
@@ -81,6 +93,7 @@ PERMISSION_GROUPS: tuple[str, ...] = (
     "users",
     "roles",
     "ai",
+    "relationships",
 )
 
 ALL_PERMISSION_CODES: frozenset[str] = frozenset(p.code for p in PERMISSION_CATALOG)
@@ -119,12 +132,23 @@ _OPERATOR_PERMS = frozenset(
         "trash.read",
         "trash.restore",
         "ai.use",
+        "relationships.read",
+        "relationships.manage",
     }
 )
 _ANALYST_PERMS = frozenset(
-    {"assets.read", "incidents.read", "audit.read", "trash.read", "ai.use"}
+    {
+        "assets.read",
+        "incidents.read",
+        "audit.read",
+        "trash.read",
+        "ai.use",
+        "relationships.read",
+    }
 )
-_VIEWER_PERMS = frozenset({"assets.read", "incidents.read", "ai.use"})
+_VIEWER_PERMS = frozenset(
+    {"assets.read", "incidents.read", "ai.use", "relationships.read"}
+)
 
 #: Built-in roles. **Administrator always holds every catalog permission** - it is
 #: computed from :data:`ALL_PERMISSION_CODES`, so a newly introduced permission is

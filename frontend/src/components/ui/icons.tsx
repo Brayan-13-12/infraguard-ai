@@ -280,3 +280,16 @@ export const RestoreIcon = (p: IconProps) => (
     <path d="M12 18v-7M9 14l3-3 3 3" />
   </Base>
 );
+
+export const ListIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M8 6h13M8 12h13M8 18h13" />
+    <path d="M3 6h.01M3 12h.01M3 18h.01" />
+  </Base>
+);
+
+export const MaximizeIcon = (p: IconProps) => (
+  <Base {...p}>
+    <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" />
+  </Base>
+);

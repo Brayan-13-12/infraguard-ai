@@ -89,9 +89,10 @@ class AuditEntityType(enum.StrEnum):
     ASSET = "Asset"
     INCIDENT = "Incident"
     AUTHENTICATION = "Authentication"
-    # --- reserved ---
     USER = "User"
     ROLE = "Role"
+    RELATIONSHIP = "Relationship"
+    # --- reserved ---
     PERMISSION = "Permission"
 
 

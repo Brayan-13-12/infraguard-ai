@@ -87,7 +87,14 @@ describe("AssetDetailWorkspace", () => {
     renderWorkspace();
     await screen.findByRole("dialog");
 
-    expect(screen.getAllByRole("tab")).toHaveLength(4);
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "Resumen",
+      "Información técnica",
+      "Incidentes",
+      "Dependencias",
+      "Actividad",
+    ]);
     // Resumen (default)
     expect(screen.getByText("payments-team")).toBeInTheDocument();
     expect(screen.getByText("Handles invoicing.")).toBeInTheDocument();
@@ -97,9 +104,11 @@ describe("AssetDetailWorkspace", () => {
     expect(screen.getByText("billing.internal")).toBeInTheDocument();
     expect(screen.getByText("10.2.3.4")).toBeInTheDocument();
 
-    // Actividad — metadata + ID
+    // Actividad — metadata + ID, and the old "coming soon" placeholder gone
     await userEvent.click(screen.getByRole("tab", { name: /actividad/i }));
     expect(screen.getByText("abc-123")).toBeInTheDocument();
+    expect(screen.queryByText("Dependencias y topología")).not.toBeInTheDocument();
+    expect(screen.queryByText("Próximamente")).not.toBeInTheDocument();
   });
 
   it("edits a field inline: opens a small editor, PATCHes, toasts, refreshes list", async () => {

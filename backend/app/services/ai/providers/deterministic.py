@@ -519,6 +519,10 @@ class DeterministicProvider(AIProvider):
 
     def _asset_context(self, q: str, ctx: Any, ex: Any) -> ProviderResult:
         s = ctx.summary or {}
+        if _any(q, "impacto", "si falla", "si cae", "se veria afectado", "blast radius"):
+            return self._asset_impact(s, ctx, ex)
+        if _any(q, "depende", "dependencia", "dependencias", "topologia", "vecinos"):
+            return self._asset_dependencies(s, ctx, ex)
         if _any(q, "incidente", "afectado", "afectan", "problema"):
             try:
                 res = ex.call("search_incidents", {"asset_id": s["id"], "limit": 15})
@@ -574,7 +578,69 @@ class DeterministicProvider(AIProvider):
             suggestions=[
                 "¿Qué incidentes lo han afectado?",
                 "¿Qué cambios recientes tiene?",
+                "¿De qué depende?",
             ],
+        )
+
+    def _asset_dependencies(self, s: dict, ctx: Any, ex: Any) -> ProviderResult:
+        if not ex.can("get_asset_relationships"):
+            return ProviderResult(
+                text=(
+                    "No tienes permiso para consultar las relaciones entre activos, "
+                    "así que no puedo mostrar de qué depende este activo."
+                )
+            )
+        res = ex.call("get_asset_relationships", {"asset_id": s["id"]})
+        if not res.data.get("found"):
+            return ProviderResult(text=f"{ctx.label} ya no está disponible.")
+        outgoing = [
+            r for r in res.data["outgoing"] if r["relationship_type"] in ("depends_on", "uses")
+        ]
+        incoming = [
+            r for r in res.data["incoming"] if r["relationship_type"] in ("depends_on", "uses")
+        ]
+        if not outgoing and not incoming:
+            return ProviderResult(
+                text=f"{ctx.label} no tiene dependencias registradas en la topología.",
+                suggestions=["¿Qué podría verse afectado si falla?"],
+            )
+        parts = []
+        if outgoing:
+            names = ", ".join(r["other_asset"]["name"] for r in outgoing[:8])
+            parts.append(f"{ctx.label} depende de: {names}")
+        if incoming:
+            names = ", ".join(r["other_asset"]["name"] for r in incoming[:8])
+            parts.append(f"dependen de {ctx.label}: {names}")
+        return ProviderResult(
+            text=". ".join(p[0].upper() + p[1:] for p in parts) + ".",
+            suggestions=["¿Qué podría verse afectado si falla?", "Muéstrame su topología"],
+        )
+
+    def _asset_impact(self, s: dict, ctx: Any, ex: Any) -> ProviderResult:
+        if not ex.can("get_asset_impact"):
+            return ProviderResult(
+                text=(
+                    "No tienes permiso para consultar el impacto potencial de este "
+                    "activo en la topología."
+                )
+            )
+        res = ex.call("get_asset_impact", {"asset_id": s["id"], "max_depth": 2})
+        if not res.data.get("found"):
+            return ProviderResult(text=f"{ctx.label} ya no está disponible.")
+        affected = res.data["affected_assets"]
+        if not affected:
+            return ProviderResult(
+                text=f"Ningún activo depende de {ctx.label} en la topología registrada; "
+                "un fallo no se propagaría a otros activos según las relaciones actuales."
+            )
+        names = ", ".join(a["name"] for a in affected[:10])
+        n = len(affected)
+        return ProviderResult(
+            text=(
+                f"Si {ctx.label} falla, podrían verse afectados {n} "
+                f"{_plural(n, 'activo', 'activos')}: {names}" + ("…" if n > 10 else ".")
+            ),
+            suggestions=["¿De qué depende este activo?"],
         )
 
     # -- context: incident -----------------------------------------

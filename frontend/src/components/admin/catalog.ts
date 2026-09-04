@@ -21,6 +21,8 @@ const PERMISSION_LABEL_KEYS: Record<Permission, TranslationKey> = {
   "roles.read": "admin.permissionLabels.roles.read",
   "roles.manage": "admin.permissionLabels.roles.manage",
   "ai.use": "admin.permissionLabels.ai.use",
+  "relationships.read": "admin.permissionLabels.relationships.read",
+  "relationships.manage": "admin.permissionLabels.relationships.manage",
 };
 
 const GROUP_LABEL_KEYS: Record<string, TranslationKey> = {
@@ -31,6 +33,7 @@ const GROUP_LABEL_KEYS: Record<string, TranslationKey> = {
   users: "admin.permissionGroups.users",
   roles: "admin.permissionGroups.roles",
   ai: "admin.permissionGroups.ai",
+  relationships: "admin.permissionGroups.relationships",
 };
 
 type T = (key: TranslationKey, vars?: Record<string, string | number>) => string;

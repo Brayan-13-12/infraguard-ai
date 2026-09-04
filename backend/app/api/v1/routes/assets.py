@@ -45,6 +45,12 @@ from app.schemas.asset import (
     AssetUpdate,
     MessageResponse,
 )
+from app.schemas.relationship import (
+    AssetRelationshipsGrouped,
+    AssetSummaryRead,
+    RelationshipCounts,
+    RelationshipDetail,
+)
 from app.services.assets import (
     AssetQuery,
     create_asset,
@@ -55,6 +61,8 @@ from app.services.assets import (
     update_asset,
 )
 from app.services.audit import AuditContext, FieldChange, diff_fields, record_event
+from app.services.graph import sync as graph_sync
+from app.services.relationships import grouped_for_asset
 from app.services.trash import soft_delete_asset
 
 router = APIRouter(
@@ -161,6 +169,41 @@ def get_asset_endpoint(asset_id: uuid.UUID, db: Session = Depends(get_db)) -> As
     return AssetRead.model_validate(_load(db, asset_id))
 
 
+def _relationship_detail(rel, source, target) -> RelationshipDetail:
+    return RelationshipDetail(
+        id=rel.id,
+        source_asset_id=rel.source_asset_id,
+        target_asset_id=rel.target_asset_id,
+        relationship_type=rel.relationship_type,
+        description=rel.description,
+        created_at=rel.created_at,
+        updated_at=rel.updated_at,
+        source=AssetSummaryRead.model_validate(source),
+        target=AssetSummaryRead.model_validate(target),
+    )
+
+
+@router.get(
+    "/{asset_id}/relationships",
+    response_model=AssetRelationshipsGrouped,
+    summary="This asset's relationships, grouped by direction",
+    responses={404: {"model": MessageResponse}},
+    dependencies=[Depends(require_permission("relationships.read"))],
+)
+def asset_relationships_endpoint(
+    asset_id: uuid.UUID, db: Session = Depends(get_db)
+) -> AssetRelationshipsGrouped:
+    asset = _load(db, asset_id)
+    outgoing, incoming = grouped_for_asset(db, asset.id)
+    return AssetRelationshipsGrouped(
+        outgoing=[_relationship_detail(*row) for row in outgoing],
+        incoming=[_relationship_detail(*row) for row in incoming],
+        counts=RelationshipCounts(
+            outgoing=len(outgoing), incoming=len(incoming), total=len(outgoing) + len(incoming)
+        ),
+    )
+
+
 @router.post(
     "",
     response_model=AssetRead,
@@ -190,6 +233,7 @@ def create_asset_endpoint(
         },
     )
     db.commit()
+    graph_sync.upsert_asset(asset)  # best-effort - never blocks on Neo4j (§44)
     return AssetRead.model_validate(asset)
 
 
@@ -225,6 +269,7 @@ def update_asset_endpoint(
             changes=changes,
         )
     db.commit()
+    graph_sync.upsert_asset(asset)  # best-effort - never blocks on Neo4j (§44)
     return AssetRead.model_validate(asset)
 
 
@@ -295,6 +340,7 @@ def delete_asset_endpoint(
         },
     )
     db.commit()
+    graph_sync.upsert_asset(asset)  # best-effort - hides it (trashed=true) + its edges
     return MessageResponse(detail="Asset moved to Trash")
 
 
@@ -314,4 +360,5 @@ def _set_active_audited(
             changes=[FieldChange("is_active", was_active, asset.is_active)],
         )
     db.commit()
+    graph_sync.upsert_asset(asset)  # best-effort - never blocks on Neo4j (§44)
     return AssetRead.model_validate(asset)

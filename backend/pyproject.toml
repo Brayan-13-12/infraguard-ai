@@ -21,6 +21,8 @@ dependencies = [
     "pyjwt==2.13.0",          # JWT encode/decode (well maintained, minimal surface)
     "argon2-cffi==25.1.0",    # Argon2id password hashing (reference implementation)
     "email-validator==2.2.0", # backs pydantic EmailStr for RFC-compliant validation
+    # --- Asset Relationships & Topology milestone ---
+    "neo4j==5.28.1", # official Neo4j Python driver - the only Neo4j import in the codebase
 ]
 
 [project.optional-dependencies]

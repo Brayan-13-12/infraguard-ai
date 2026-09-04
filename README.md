@@ -18,11 +18,15 @@ impact and root cause.
 > `GET /api/v1/assets/summary`, with drill-down into the filtered Assets list.
 > `status` and `criticality` list filters now accept repeated values.
 >
-> **Still out of scope** (later phases): asset detail/create/edit as route-driven
-> drawers, dependency graphs / Neo4j, incidents, AI analysis, Kubernetes,
-> obsolescence, RBAC / roles, and (from v0.2) OAuth / MFA / refresh tokens /
-> password reset / email verification / server-side JWT revocation. See
-> [Roadmap](#roadmap). This is **not** production-ready.
+> **Still out of scope** (later phases): Kubernetes, obsolescence tracking,
+> and (from v0.2) OAuth / MFA / refresh tokens / password reset / email
+> verification / server-side JWT revocation. See [Roadmap](#roadmap). This is
+> **not** production-ready.
+>
+> This banner predates several shipped milestones (Incidents, Audit, Trash,
+> RBAC, AI Assistant, Asset Relationships & Topology) - see
+> [Roadmap → Implemented now](#implemented-now) for the current, maintained
+> feature list.
 
 ---
 
@@ -38,14 +42,19 @@ impact and root cause.
 
 ```
 Browser ──▶ frontend (Next.js) ──[edge net]──▶ backend (FastAPI) ──[data net]──▶ PostgreSQL
+                                                                    └─[data net]──▶ Neo4j (derived)
 ```
 
 The frontend renders a dashboard, calls the backend **readiness** endpoint, and
 (v0.2) authenticates against `/api/v1/auth/*`. The access token is an **HS256
 JWT** carried in an **HttpOnly cookie** - never in `localStorage`, never
 readable by JS. Passwords are hashed with **Argon2id**. Network segmentation
-means the frontend container **cannot reach PostgreSQL** - only the backend
-bridges the two tiers. Full detail (with Mermaid diagrams) is in
+means the frontend container **cannot reach PostgreSQL or Neo4j** - only the
+backend bridges the two tiers. **PostgreSQL is canonical for everything,
+including asset relationships**; **Neo4j is a backend-only, optional, derived
+graph projection** used for the topology query path and future graph-native
+features - the frontend never holds Neo4j credentials, sends Cypher, or
+depends on a Neo4j driver. Full detail (with Mermaid diagrams) is in
 [`docs/architecture.md`](docs/architecture.md).
 
 ## Technology stack
@@ -57,32 +66,38 @@ bridges the two tiers. Full detail (with Mermaid diagrams) is in
 | Charts | Recharts (only on the Dashboard, lazy-loaded via `next/dynamic`, wrapped behind InfraGuard components with an accessible companion table) |
 | i18n | Spanish-only visible UI; typed keys, `es.ts` source of truth, `en.ts` structurally validated; no language switcher, no persisted language |
 | Frontend tests | Vitest + Testing Library; ESLint 9 flat config |
+| Graph visualization | `@xyflow/react` (React Flow) + `@dagrejs/dagre` for layout - the **only** graph library, isolated to the `/topology` route chunk |
 | Backend | Python 3.13, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, pytest, ruff |
 | Auth | Argon2id (`argon2-cffi`), JWT HS256 (`pyjwt`), HttpOnly cookie |
 | Backend deps | `pyproject.toml` + hash-pinned `requirements*.txt` (pip-tools) |
-| Database | PostgreSQL 17 (Docker only) - `users` + `assets` tables via Alembic |
+| Database | PostgreSQL 17 (Docker only) - canonical store for every table, including `asset_relationships` |
+| Graph projection | Neo4j 5.26 Community (Docker, optional) - a **derived**, backend-only projection of canonical asset relationships; official `neo4j` Python driver |
 | Orchestration | Docker + Docker Compose (segmented networks, hardened containers) |
-| CI | GitHub Actions - lint, unit + integration tests, Docker build + migrate + auth smoke test (SHA-pinned actions) |
+| CI | GitHub Actions - lint, unit + integration tests, Docker build + migrate + auth/relationships/topology smoke tests, ephemeral Neo4j (SHA-pinned actions) |
 
 ## Repository structure
 
 ```
 infraguard-ai/
 ├── frontend/           Next.js app  (see frontend/README.md)
-│   └── src/            app/{login,register,dashboard,assets,healthz} ·
-│                       components/{ui,theme,shell,auth,dashboard,assets} ·
-│                       services/{auth,health,assets} · i18n · lib · types
+│   └── src/            app/{login,register,dashboard,assets,incidents,audit,trash,
+│                       admin,ai,topology,healthz} ·
+│                       components/{ui,theme,shell,auth,dashboard,assets,incidents,
+│                       audit,trash,admin,ai,topology} ·
+│                       services/{auth,health,assets,incidents,audit,trash,admin,ai,
+│                       relationships,topology} · i18n · lib · types
 ├── backend/            FastAPI app
 │   ├── app/            api/{deps,errors,v1/routes} · core/{config,security,ratelimit,db_safety}
-│   │                   · db · models · schemas · services · seeds · scripts
-│   ├── alembic/versions/   *_create_users_table.py · … · *_user_account_status.py
+│   │                   · db · models · schemas · services/{…,graph} · seeds · scripts
+│   ├── alembic/versions/   *_create_users_table.py · … · *_add_asset_relationships.py
 │   ├── tests/{unit,integration}/
 │   └── requirements*.txt   hash-pinned dependency locks
 ├── infra/              Placeholder for future IaC (Kubernetes, Helm)
 ├── docs/               architecture.md
-├── .github/workflows/  CI: lint + unit/integration tests + Docker migrate/bootstrap/seed smoke
+├── .github/workflows/  CI: lint + unit/integration tests + Docker migrate/bootstrap/seed +
+│                       relationships/topology + Neo4j-outage smoke tests
 ├── docker-compose.yml  Full local stack (segmented networks, hardened) + one-shot
-│                       migrate / bootstrap / seed-demo + throwaway db-test (profile)
+│                       migrate / bootstrap / seed-demo / sync-topology + throwaway db-test
 ├── .env.example        Environment template (placeholders only)
 ├── .gitignore  ·  LICENSE (MIT)  ·  README.md
 ```
@@ -129,6 +144,9 @@ non-secret fallback defaults, so it starts without a `.env` file.
 | `AI_MESSAGE_MAX_LENGTH` | Max user-message length (default 4000) |
 | `AI_MAX_TOOL_RESULTS` / `AI_HISTORY_WINDOW` | Bounded tool result rows / replayed history turns |
 | `AI_RATE_LIMIT_MAX_MESSAGES` / `AI_RATE_LIMIT_WINDOW_SECONDS` | Per-user AI message limiter (default 20 / 60 s) |
+| `NEO4J_URI` | Bolt URI for the **optional** graph projection (default `bolt://neo4j:7687` in Compose). **Unset it (or stop/remove the `neo4j` service) and every other InfraGuard feature - including relationship CRUD and the topology API - keeps working unchanged** (bounded PostgreSQL traversal) |
+| `NEO4J_USERNAME` / `NEO4J_PASSWORD` / `NEO4J_DATABASE` | Neo4j credentials - **backend only**, never a `NEXT_PUBLIC_*`, never sent to the browser |
+| `NEO4J_TIMEOUT_SECONDS` | Per-query timeout (`0 < t <= 60`, default 5) before the graph is treated as unavailable |
 
 ### Production configuration safety
 
@@ -152,9 +170,10 @@ docker compose up --build
 ```
 
 ```bash
-docker compose run --rm migrate     # apply DB migrations
-docker compose run --rm bootstrap   # create the first Administrator (idempotent)
-docker compose run --rm seed-demo   # load the curated demo dataset (idempotent, additive)
+docker compose run --rm migrate         # apply DB migrations
+docker compose run --rm bootstrap       # create the first Administrator (idempotent)
+docker compose run --rm seed-demo       # load the curated demo dataset (idempotent, additive)
+docker compose run --rm sync-topology   # full rebuild of the Neo4j graph projection (idempotent, optional)
 ```
 
 Public registration only files a **pending access request**; the sole
@@ -171,21 +190,38 @@ Access requests**.
 | Backend liveness | http://localhost:8000/api/v1/health/live |
 | Backend readiness | http://localhost:8000/api/v1/health/ready |
 
-The `migrate` / `bootstrap` / `seed-demo` services are **one-shot** and never run
-on `docker compose up`. PostgreSQL publishes **no** host port and lives on an
-`internal` network with no outbound route. Frontend/backend host ports bind to
-`127.0.0.1` only.
+The `migrate` / `bootstrap` / `seed-demo` / `sync-topology` services are
+**one-shot** and never run on `docker compose up`. PostgreSQL publishes **no**
+host port and lives on an `internal` network with no outbound route.
+Frontend/backend host ports bind to `127.0.0.1` only.
+
+**Neo4j** (`neo4j` service, image `neo4j:5.26.0-community`, pinned by digest)
+*is* started by `docker compose up -d` by default, on the same `internal`
+`data` network as PostgreSQL - like `db`, it publishes **no host port**
+(diagnose with `docker compose exec neo4j cypher-shell` or the backend's own
+`GET /api/v1/topology/health`, not a browser). It is entirely **optional**:
+nothing else `depends_on` it being healthy, and stopping / removing it (or
+unsetting `NEO4J_URI`) leaves relationship management and the rest of
+InfraGuard fully usable - only the topology graph view degrades to a clear
+"unavailable" state. After the stack is up, project the current PostgreSQL
+relationships into the graph with `docker compose run --rm sync-topology`
+(idempotent full rebuild; **not** run automatically on every `up`, so run it
+once after the first `migrate` + `seed-demo`, and again any time you want to
+refresh the projection).
 
 ## Database safety
 
-`infraguard-ai_pgdata` is **persistent development data** - treat it as
-user-owned.
+`infraguard-ai_pgdata` and `infraguard-ai_neo4j_data` are **persistent
+development data** - treat both as user-owned. Neo4j only ever holds a
+**derived** projection (PostgreSQL stays canonical), but losing it is still
+disruptive - it must be manually rebuilt with `sync-topology` - so it gets the
+same protection as `pgdata`.
 
 | Command | Verdict |
 | --- | --- |
 | `docker compose down` / `docker compose stop` | ✅ safe - stops/removes containers, keeps data |
-| `docker compose down -v` | ⛔ **never** for the dev environment - it destroys `pgdata` |
-| `docker volume rm infraguard-ai_pgdata` · `docker volume prune` · `docker system prune --volumes` | ⛔ never |
+| `docker compose down -v` | ⛔ **never** for the dev environment - it destroys `pgdata` **and** `neo4j_data` |
+| `docker volume rm infraguard-ai_pgdata` / `infraguard-ai_neo4j_data` · `docker volume prune` · `docker system prune --volumes` | ⛔ never |
 | drop / truncate / reset / recreate the dev database "for testing" | ⛔ never |
 
 - **Regenerate demo data** with `docker compose run --rm seed-demo` - it is
@@ -271,6 +307,17 @@ pnpm dev
 | `GET` | `/api/v1/trash/incidents` | List trashed incidents - `page` (15, max 100) `q` `severity`\* `status`\* `deleted_by` `from` `to` → `200` (auth) |
 | `GET` | `/api/v1/trash/incidents/{id}` | Trashed incident detail (read-only, + timeline + affected assets) → `200` · `404` (auth) |
 | `POST` | `/api/v1/trash/incidents/{id}/restore` | Restore to the live module (same id, history intact) → `200` · `404` (needs `trash.restore` + CSRF) |
+| `GET` | `/api/v1/relationships/types` | The 6-entry relationship taxonomy (code, Spanish label, inverse label, direction semantics) → `200` (auth) |
+| `GET` | `/api/v1/relationships` | List relationships - `page` `page_size` (50, max 100) `source_asset_id` `target_asset_id` `asset_id` `relationship_type`\* `direction` → `200` (needs `relationships.read`) |
+| `POST` | `/api/v1/relationships` | Create an edge `{source_asset_id, target_asset_id, relationship_type, description?}` → `201` · `404` (unknown/trashed asset) · `409` (duplicate edge) · `422` (self-link, unknown type) (needs `relationships.manage` + CSRF) |
+| `GET` | `/api/v1/relationships/{id}` | Relationship detail incl. both endpoint Assets → `200` · `404` (needs `relationships.read`) |
+| `PATCH` | `/api/v1/relationships/{id}` | Update **only** `relationship_type` / `description` - source/target are immutable by design → `200` · `404` · `409` (would duplicate) · `422` (needs `relationships.manage` + CSRF) |
+| `DELETE` | `/api/v1/relationships/{id}` | Real delete (edges are not modeled in Trash) → `200` · `404` (needs `relationships.manage` + CSRF) |
+| `GET` | `/api/v1/assets/{id}/relationships` | One asset's relationships, grouped `{outgoing, incoming, counts}` - no N+1 → `200` · `404` (needs `relationships.read` + `assets.read`) |
+| `GET` | `/api/v1/topology/subgraph` | Bounded dependency graph around `root_asset_id` - `depth` (max 3) `direction` (`both`/`upstream`/`downstream`) `relationship_type`\* `environment` `criticality`\* `status`\* `node_cap` (max 500); response has `truncated: true` if capped → `200` · `404` (needs `relationships.read` + `assets.read`) |
+| `GET` | `/api/v1/topology/assets/{id}/impact` | Read-only "potential impact": Assets reachable through **propagating** relationship types, with distance + path → `200` · `404` (needs `relationships.read` + `assets.read`) |
+| `GET` | `/api/v1/topology/path` | One bounded shortest path between two Assets (`max_depth`, default/​max 3) → `200` · `404` (needs `relationships.read` + `assets.read`) |
+| `GET` | `/api/v1/topology/health` | Neo4j graph status: `configured` / `operational` / `unavailable` / `not_configured` - **never** fails or affects overall platform health → `200` (auth) |
 | `GET` | `/api/v1/admin/permissions` | Grouped permission catalog → `200` (needs `roles.read`) |
 | `GET` | `/api/v1/admin/users` | List users - `page` (20, max 100) `q` `status` (`pending`/`active`/`rejected`/`disabled`) `role` (slug); each row carries `account_status` + its roles → `200` (needs `users.read`) |
 | `GET` | `/api/v1/admin/access-requests` | Pending access requests, newest first - `page` `q` → `200` (needs `users.read`) |
@@ -309,20 +356,21 @@ the authenticated user, never a request-body value.
 **Frontend visibility is not security** - every permission is enforced in the
 backend; the frontend only mirrors it.
 
-- **Permission catalog (17)**, grouped `assets` / `incidents` / `audit` /
-  `trash` / `users` / `roles` / `ai` - codes like `assets.update`,
-  `trash.restore`, `users.manage`, `ai.use`. Codes are stable machine
-  identifiers, never translated. `trash.purge` is *reserved and documented* for a
-  future "empty Trash".
+- **Permission catalog (19)**, grouped `assets` / `incidents` / `audit` /
+  `trash` / `users` / `roles` / `ai` / `relationships` - codes like
+  `assets.update`, `trash.restore`, `users.manage`, `ai.use`,
+  `relationships.manage`. Codes are stable machine identifiers, never
+  translated. `trash.purge` is *reserved and documented* for a future "empty
+  Trash".
 - **System roles** (immutable, un-deletable): **Administrator** (every
   permission - and any future one automatically), **Operator** (asset + incident
-  operations + restore, no `*.delete`, no admin), **Analyst** (read + audit +
-  trash read), **Viewer** (asset + incident read). **All four** system roles
-  include `ai.use` - the AI Assistant is available to every user, and each AI
-  tool separately requires the underlying domain read permission. Administrators
-  can create
-  fully-editable **custom roles**. Viewer is only *pre-selected* in the approve
-  dialog - it is never auto-assigned.
+  operations + restore + `relationships.manage`, no `*.delete`, no admin),
+  **Analyst** (read + audit + trash read + `relationships.read`), **Viewer**
+  (asset + incident + `relationships.read`). **All four** system roles include
+  `ai.use` - the AI Assistant is available to every user, and each AI tool
+  separately requires the underlying domain read permission. Administrators can
+  create fully-editable **custom roles**. Viewer is only *pre-selected* in the
+  approve dialog - it is never auto-assigned.
 - **Account lifecycle** (`account_status`, single source of truth; `is_active` is
   a derived read-only alias for `active`): `pending` → `active` / `rejected`, and
   `active` ⇄ `disabled` for runtime enable/disable.
@@ -420,6 +468,108 @@ explicitly-confirmed action layer.
   user-owned + user-visible, and the app does not audit direct reads either.
   Revisit when the action layer lands.
 
+### Asset Relationships & Topology
+
+Users model real dependencies between Assets (`prod-api-01 depends_on
+prod-db-primary`), manage them, and explore the result as an interactive
+dependency graph - **PostgreSQL is canonical**; **Neo4j is an optional,
+backend-only, derived projection**, never the system of record.
+
+- **Taxonomy (6 types, deliberately small)** - `depends_on` / `hosts` /
+  `connects_to` / `uses` / `provides_service_to` / `member_of`, each with a
+  stable code, Spanish label + inverse label, description, and an explicit
+  **direction semantic**: if `A depends_on B`, `B` is *upstream* of `A` ("de
+  qué depende") and `A` is *downstream* of `B` ("qué depende de él"). All six
+  are stored **directed** internally, even the symmetric-feeling ones
+  (`connects_to`), for v1 simplicity - `GET /api/v1/relationships/types` is the
+  single source of truth, mirrored exactly in the frontend.
+- **`asset_relationships`** - UUID PK, `source_asset_id` / `target_asset_id`
+  (FK `assets.id`), `relationship_type`, optional `description`, `created_by`
+  (FK `users.id`, `ON DELETE SET NULL`). `CHECK` constraints reject a
+  **self-link** (`source == target`, `422`) and a **`UNIQUE`** constraint on
+  `(source, target, relationship_type)` rejects an exact duplicate edge
+  (`409`) - the reverse direction (`B → A`) is a distinct, valid edge. The
+  relationship's **UUID is its stable identity** - renaming an Asset never
+  breaks its graph edges.
+- **Soft-delete interaction** - trashing an Asset does **not** cascade-delete
+  its relationships: the rows remain in PostgreSQL, but every live query
+  (`both_endpoints_live()`) excludes edges touching a trashed Asset, so the
+  live topology and grouped relationship view simply omit it. Restoring the
+  Asset makes its relationships reappear automatically - no explicit
+  "reactivation" step, and no relationship history is ever lost.
+- **`relationships.read` / `relationships.manage`** - two new, distinct
+  permissions (catalog now **19**) rather than folding this into
+  `assets.manage`, because topology is its own capability that will grow
+  further (impact analysis, future AI graph tools). The topology query API
+  additionally requires `assets.read`.
+- **API** - `GET/POST /api/v1/relationships`, `GET/PATCH/DELETE
+  /api/v1/relationships/{id}`, `GET /api/v1/assets/{id}/relationships`
+  (grouped `{outgoing, incoming, counts}`, no N+1). `PATCH` can change only
+  `relationship_type` / `description` - moving an edge to a different
+  source/target means delete + re-create, by design. `DELETE` is a **real**
+  delete (edges are not modeled in Trash - it has always represented
+  operational entities, not edge metadata); both mutations are audited
+  (`Relationship` entity type, `CREATE` / `UPDATE` / `DELETE`).
+- **Asset detail → "Dependencias" tab** - a grouped relationship workspace
+  (upstream / downstream / hosts / connects-to sections, not one big table), a
+  restrained summary line (*"4 salientes · 7 entrantes · 11 relaciones"*, not
+  six KPI cards), an **"+ Añadir relación"** dialog (type select + a
+  server-searched Asset picker, paginated 20 at a time - never all Assets in
+  one giant `<select>`), inline edit / delete behind a `ConfirmDialog`, and a
+  **"Ver topología"** link into the dedicated workspace below.
+- **`/topology`** - a dedicated, permission-gated workspace (own top-level
+  route, not folded into Asset detail, since topology is a platform
+  capability) built on **React Flow** (`@xyflow/react`) with `dagre` layout -
+  the only graph library added, chosen for first-class React integration,
+  custom node/edge components, and built-in pan/zoom/controls. Focus an Asset
+  (`?asset_id=`), search, filter (environment / criticality / type / status /
+  relationship type, collapsible), select a node or edge for an inspector,
+  expand neighbors incrementally (merged by stable id, never a full refetch),
+  and an inline, read-only **"Impacto potencial"** panel. Node color stays
+  restrained - a neutral surface with a criticality/status accent, not one
+  bright color per Asset type. An accessible **"Lista"** view (every node as a
+  real focusable button) stands in for the graph on constrained input or for
+  screen-reader users.
+- **`GET /topology/subgraph`** is intentionally **bounded**, not a generic
+  graph endpoint: default depth 1, max depth 3, a node cap (default 200, max
+  500) with an honest `truncated: true` flag rather than silently dropping
+  data - "Ajusta los filtros o enfoca un activo" if you hit it.
+- **Impact analysis** (`GET /topology/assets/{id}/impact`) is **read-only** and
+  walks only an explicit **propagating subset** of relationship types
+  (`depends_on` / `uses` reverse; `hosts` / `provides_service_to` forward) -
+  `connects_to` / `member_of` are informational only and never propagate.
+  Traversal (impact **and** path-finding) tracks visited node ids so a cycle
+  (`A → B → C → A`) can never infinite-loop; both are covered by dedicated
+  tests.
+- **The topology *query* path is PostgreSQL, not Neo4j** - a bounded, iterative
+  breadth-first search directly against `asset_relationships` answers
+  `/subgraph`, `/impact` and `/path`. This is a deliberate v1 design choice: it
+  keeps a single source of truth for graph reads and means **Neo4j being
+  unavailable never affects topology correctness** - only `GET
+  /topology/health` reports `unavailable`, relationship management keeps
+  working unchanged, and the graph UI shows a clear "Topología no disponible
+  temporalmente" state (never fake data).
+- **Neo4j is a real, working, separately-tested derived projection** (see
+  `backend/app/services/graph/`) kept eventually consistent for future
+  graph-native use: every relationship / Asset mutation attempts a **fast,
+  best-effort sync immediately after the PostgreSQL commit** (never before,
+  and a Neo4j failure never rolls back or blocks the mutation); `docker
+  compose run --rm sync-topology` does an idempotent **full rebuild** from
+  canonical PostgreSQL data, upserting current nodes/edges and pruning only
+  stale **InfraGuard-managed** ones (never touching unrelated graph data).
+  Cypher relationship types are drawn from a fixed backend allow-list - never
+  built from unvalidated input - and every query is parameterized.
+- **AI Assistant graph tools** - three new **read-only**, bounded,
+  permission-gated tools (`get_asset_relationships`, `get_asset_neighbors`,
+  `get_asset_impact`; each requires `relationships.read` **and**
+  `assets.read`) extend the existing v1 tool layer - no new architecture, no
+  write actions - enabling grounded answers like *"¿De qué depende
+  prod-api-01?"* or *"¿Qué podría verse afectado si falla prod-db-primary?"*.
+- **Not in scope for v1**: automatic discovery (network telemetry, CMDB /
+  NetBox / cloud / Kubernetes), live traffic flow, graph ML / community
+  detection, AI-generated relationship mutations, automated blast-radius
+  remediation, historical topology snapshots, deep Incident-topology UI.
+
 ### Trash / soft delete (Governance Phase 2)
 
 `DELETE /assets/{id}` and `DELETE /incidents/{id}` set `deleted_at` (timestamptz,
@@ -467,13 +617,15 @@ All authenticated users can currently read the audit log.
 The **Incident ↔ Asset** relationship is a real many-to-many (`incident_assets`
 association table, not a JSON column); each incident carries a persisted
 **timeline** (`incident_events`). Entering a terminal status (`Resolved` /
-`Closed`) stamps `resolved_at`; reopening clears it. Asset dependency topology,
-impact analysis, AI root-cause and automated correlation are **future**
-milestones.
+`Closed`) stamps `resolved_at`; reopening clears it. Asset dependency topology
+and read-only impact analysis are implemented - see **Asset Relationships &
+Topology** above. AI root-cause and automated correlation, and a dedicated
+Incident-level "Topología afectada" view, remain **future** work.
 
-\* `criticality`, `status`, `severity`, `priority`, `action` and `entity_type`
-are **repeatable** (`?status=Degraded&status=Offline` → `... IN (...)`); a single
-value still works.
+\* `criticality`, `status`, `severity`, `priority`, `action`, `entity_type` and
+`relationship_type` are **repeatable**
+(`?status=Degraded&status=Offline` → `... IN (...)`); a single value still
+works.
 `/assets/summary` and `/incidents/summary` are read-only, use a handful of
 `GROUP BY` queries, and report `0` for absent catalog values. The incident list's
 `affected_asset_count` is a correlated sub-select (no N+1).
@@ -508,9 +660,15 @@ against a non-disposable database name.
 a **curated, deterministic** dataset: ~70 assets and ~30 incidents across
 Production / Staging / Test / Development, with a realistic spread of
 criticality, severity, status and priority; incident↔asset relationships;
-backdated timelines; matching audit history; a handful of Trash records; and 3
-pending access requests - enough to exercise pagination, filters, search, the
-Dashboard KPIs and charts, Audit, Trash and Administration.
+**~88 asset-to-asset relationships** forming recognizable, realistic clusters
+(edge network → load balancer → web tier → API tier → {db, cache, message
+queue}, plus identity, Kubernetes, storage/backup and monitoring groups -
+never a random full-mesh); backdated timelines; matching audit history; a
+handful of Trash records; and 3 pending access requests - enough to exercise
+pagination, filters, search, the Dashboard KPIs and charts, Audit, Trash,
+Administration and the Topology graph. Project it into Neo4j afterwards with
+`docker compose run --rm sync-topology` (optional - the seed itself only
+writes to PostgreSQL).
 
 It is **strictly additive and idempotent**: deterministic ids
 (`app/seeds/_common.py`) mean re-running it creates nothing new, and it never
@@ -535,20 +693,30 @@ container / the Compose stack on a fresh runner) - never a persistent volume - s
 its `docker compose down -v` teardown is safe there and only there.
 
 **CI** (`.github/workflows/ci.yml`) runs all of the above on every PR, then
-builds the Compose stack, applies migrations, runs the explicit
-`bootstrap` job (twice, to prove idempotency), a **`seed-demo` smoke test**
-(seed → assert multi-page asset/incident counts, Critical KPIs, Trash and
-access-request counts → seed again → counts unchanged), and smoke-tests
-liveness,
-readiness, the auth / assets / incidents / audit APIs, the Trash + restore flow,
-the frontend routes, and the **access-request + RBAC** path: the bootstrapped
-Administrator logs in (never registered) → a public registration is `pending`
-and cannot log in (`403 account_pending`) → duplicate / different-casing
-registration is `409` → the admin approves it as Viewer → the approved user logs
-in with exactly the Viewer permissions → a Viewer reads but cannot mutate
-(`403`, not `401`) → a second request is rejected (`403 account_rejected`) → the
-last admin cannot self-lock (`409`) → a disabled user is blocked
-(`403 account_disabled`) → the changes are in the audit log.
+builds the Compose stack (including an **ephemeral Neo4j** service - never a
+persistent developer volume, never shared with a local dev graph), applies
+migrations, runs the explicit `bootstrap` job (twice, to prove idempotency), a
+**`seed-demo` smoke test** (seed → assert multi-page asset/incident counts,
+Critical KPIs, Trash and access-request counts → seed again → counts
+unchanged), and smoke-tests liveness, readiness, the auth / assets / incidents
+/ audit APIs, the Trash + restore flow, the frontend routes, the
+**access-request + RBAC** path (the bootstrapped Administrator logs in →
+never-registered → a public registration is `pending` and cannot log in
+(`403 account_pending`) → duplicate / different-casing registration is `409`
+→ the admin approves it as Viewer → the approved user logs in with exactly the
+Viewer permissions → a Viewer reads but cannot mutate (`403`, not `401`) → a
+second request is rejected (`403 account_rejected`) → the last admin cannot
+self-lock (`409`) → a disabled user is blocked (`403 account_disabled`) → the
+changes are in the audit log), and the **relationships + topology** path:
+create two Assets and an edge between them → self-link / duplicate rejected →
+the asset-scoped grouped read and the `/topology/subgraph` + `/impact` queries
+match → `sync-topology` genuinely projects the edge into Neo4j (verified with
+`cypher-shell`, not just an HTTP `200`) → deleting the relationship removes it
+from PostgreSQL immediately and from Neo4j via the best-effort incremental
+sync → the mutations are audited; then a **Neo4j-outage** test stops the
+`neo4j` container and asserts `/topology/health` reports `unavailable` while
+the Assets API and relationship CRUD keep returning `200`, before restarting
+Neo4j, resyncing, and confirming `operational` again.
 
 ## Dependency & image reproducibility
 
@@ -738,10 +906,9 @@ milestone.
   list + mobile cards, searchable **paginated** affected-asset picker, restrained
   timeline, Resolve / Reopen behind a confirm with toasts
 - Dashboard gains a compact "Incidentes recientes" block; Asset detail gains a
-  real "Incidentes relacionados" section (the dependency-map note stays a
-  **future** placeholder)
-- Not in scope: dependency topology, impact analysis, AI root-cause, automated
-  correlation / alert ingestion
+  real "Incidentes relacionados" section (dependency topology shipped later -
+  see **Asset Relationships & Topology** below)
+- Not in scope: AI root-cause, automated correlation / alert ingestion
 
 **Governance & Administration - Phase 1 (Audit Log)**
 
@@ -874,15 +1041,53 @@ milestone.
   background agents, RAG / vector DB / embeddings, web browsing, voice, file
   uploads, multi-agent orchestration, LangChain / LlamaIndex
 
+**Asset Relationships & Topology**
+
+- `asset_relationships` (canonical PostgreSQL, UUID identity, 6-type
+  taxonomy, self-link + duplicate-edge `CHECK`/`UNIQUE` constraints); Alembic
+  migration validated `upgrade → check → downgrade → upgrade`
+- New `relationships.read` / `relationships.manage` permissions (catalog now
+  **19**) - Administrator + Operator get both, Analyst + Viewer read-only
+- Full relationship CRUD API + an asset-scoped grouped read
+  (`{outgoing, incoming, counts}`); soft-deleting an Asset excludes its
+  relationships from every live query **without** cascade-deleting the rows -
+  restoring the Asset brings them back automatically
+- Asset detail gains a **"Dependencias"** tab (grouped by relationship type,
+  restrained summary, searchable Asset picker for new edges) and a dedicated
+  **`/topology`** workspace: an interactive graph (React Flow + dagre - the
+  one graph library added) with search, filters, node/edge inspectors,
+  incremental neighbor expansion, and a read-only **"Impacto potencial"**
+  panel; an accessible **"Lista"** view stands in for the canvas
+- Bounded topology query API (`/topology/subgraph` · `/impact` · `/path`) -
+  default depth 1, max depth 3, a node cap with an honest `truncated` flag;
+  answered by a cycle-safe, iterative PostgreSQL BFS (**not** Neo4j) so graph
+  reads have one source of truth and Neo4j outages never affect correctness
+- **Neo4j** (optional, Docker, backend-only) as a real, separately-tested
+  **derived** graph projection - eventually-consistent best-effort sync after
+  every PostgreSQL commit, plus an idempotent `sync-topology` full-rebuild
+  command; a Neo4j outage degrades only the graph *view* (`GET
+  /topology/health` → `unavailable`), never relationship management or the
+  rest of the platform
+- Three new **read-only** AI Assistant tools (`get_asset_relationships`,
+  `get_asset_neighbors`, `get_asset_impact`; gated on `relationships.read` +
+  `assets.read`) - no new AI architecture, no write actions
+- CI gained relationship + topology API smoke tests (incl. a live Neo4j
+  sync/projection check) and a Neo4j-outage-does-not-break-Assets-API smoke
+  test, against an ephemeral, isolated Neo4j container
+- Not in scope: automatic discovery (network telemetry / CMDB / NetBox /
+  cloud / Kubernetes), live traffic flow, graph ML, AI-generated relationship
+  mutations, automated blast-radius remediation, historical topology
+  snapshots, a dedicated Incident-level topology view
+
 ### Planned (future phases)
 
 - Governance Phase 4+: **permanent purge** of trashed records (`trash.purge`),
   audit **retention** policy, resource-/row-level authorization
 - refresh-token rotation; JWT revocation; password reset; email verification;
   OAuth; MFA; SSO/OIDC
-- Service & dependency modelling; asset lifecycle / obsolescence
-- Incident **impact analysis** (built on the v0.5 Incident ↔ Asset relationship)
-- Infrastructure dependency graph (Neo4j)
+- Asset lifecycle / obsolescence tracking
+- Incident-level **"Topología afectada" / impact** view (built on Asset
+  Relationships & Topology + the v0.5 Incident ↔ Asset relationship)
 - AI Assistant next steps: an explicitly-confirmed **action layer** (guarded,
   audited AI-initiated changes), streaming responses, retrieval over
   documentation

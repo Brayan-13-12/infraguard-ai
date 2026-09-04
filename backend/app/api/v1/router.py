@@ -12,6 +12,8 @@ from app.api.v1.routes import (
     auth,
     health,
     incidents,
+    relationships,
+    topology,
     trash,
 )
 
@@ -24,3 +26,5 @@ api_router.include_router(audit.router)
 api_router.include_router(trash.router)
 api_router.include_router(admin.router)
 api_router.include_router(ai.router)
+api_router.include_router(relationships.router)
+api_router.include_router(topology.router)

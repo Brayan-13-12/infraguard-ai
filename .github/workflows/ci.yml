@@ -4,7 +4,13 @@ name: CI
 # a Docker Compose build + migration + explicit bootstrap-admin + smoke test
 # (health, authentication, the access-request approval flow, RBAC authorization,
 # the assets API and the incidents API incl. their /summary endpoints, the audit
-# log, and the Trash / restore soft-delete flow) of the documented delivery path.
+# log, the Trash / restore soft-delete flow, asset relationships + topology incl.
+# the Neo4j graph projection sync, and Neo4j-outage graceful degradation) of the
+# documented delivery path.
+#
+# Neo4j in CI is an ephemeral Compose service torn down with the rest of the
+# stack (`docker compose down -v`) at the end of the job - never a persistent
+# developer volume, and never shared with a local dev graph (§73).
 #
 # Out of scope (dedicated later phases): image publishing, deployment, Kubernetes,
 # security scanning, release automation.
@@ -129,6 +135,14 @@ jobs:
           done
           echo "backend did not become live"; exit 1
 
+      - name: Wait for Neo4j readiness
+        run: |
+          for _ in $(seq 1 30); do
+            docker compose exec -T neo4j wget -q --spider http://localhost:7474 && exit 0
+            sleep 2
+          done
+          echo "neo4j did not become ready"; exit 1
+
       - name: Apply database migrations
         run: docker compose run --rm migrate
 
@@ -157,7 +171,7 @@ jobs:
 
           echo "the bootstrapped Administrator can log in (never registered)"
           test "$(curl -s -o /dev/null -w '%{http_code}' -c "$ADMIN" -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-admin@example.com\",\"password\":\"$PW\"}" "$API/auth/login")" = "200"
-          curl -s -b "$ADMIN" "$API/auth/me" | python3 -c "import sys,json; d=json.load(sys.stdin); assert [r['slug'] for r in d['roles']]==['administrator'], d['roles']; assert len(d['permissions'])==17, d['permissions']; assert 'ai.use' in d['permissions']; assert d['account_status']=='active'"
+          curl -s -b "$ADMIN" "$API/auth/me" | python3 -c "import sys,json; d=json.load(sys.stdin); assert [r['slug'] for r in d['roles']]==['administrator'], d['roles']; assert len(d['permissions'])==19, d['permissions']; assert 'ai.use' in d['permissions']; assert 'relationships.manage' in d['permissions']; assert d['account_status']=='active'"
 
           echo "public registration creates a PENDING access request (no roles, no access)"
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-request@example.com\",\"password\":\"$PW\"}" "$API/auth/register")" = "201"
@@ -181,7 +195,7 @@ jobs:
           echo "approve as Viewer -> account becomes ACTIVE and can log in with exactly the Viewer permissions"
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$ADMIN" -H "$ORIGIN" -H "$CT" -X POST -d "{\"role_ids\":[\"$VROLE\"]}" "$API/admin/users/$REQ_ID/approve")" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' -c "$VIEWER" -H "$ORIGIN" -H "$CT" -d "{\"email\":\"ci-request@example.com\",\"password\":\"$PW\"}" "$API/auth/login")" = "200"
-          curl -s -b "$VIEWER" "$API/auth/me" | python3 -c "import sys,json; d=json.load(sys.stdin); assert sorted(d['permissions'])==['ai.use','assets.read','incidents.read'], d['permissions']; assert d['account_status']=='active'"
+          curl -s -b "$VIEWER" "$API/auth/me" | python3 -c "import sys,json; d=json.load(sys.stdin); assert sorted(d['permissions'])==['ai.use','assets.read','incidents.read','relationships.read'], d['permissions']; assert d['account_status']=='active'"
 
           echo "viewer: can read, cannot mutate (403, never 401)"
           test "$(curl -s -o /dev/null -w '%{http_code}' -b "$VIEWER" "$API/assets")" = "200"
@@ -496,6 +510,102 @@ jobs:
 
           echo "audit trail carries DELETE + RESTORE for the asset"
           curl -s -b "$JAR" "$API/audit?entity_id=$ID" | python3 -c "import sys,json; acts={e['action'] for e in json.load(sys.stdin)['items']}; assert {'CREATE','DELETE','RESTORE'} <= acts, acts"
+
+      - name: Relationships + Topology smoke test (incl. Neo4j sync)
+        run: |
+          set -euo pipefail
+          API=http://localhost:8000/api/v1
+          ORIGIN='Origin: http://localhost:3000'
+          CT='Content-Type: application/json'
+          JAR=/tmp/topology-cookies.txt
+          EMAIL="ci-admin@example.com"
+          CREDS="{\"email\":\"$EMAIL\",\"password\":\"a-ci-only-passphrase\"}"
+
+          test "$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/login")" = "200"
+
+          echo "relationship type catalog -> all 6 taxonomy types"
+          curl -s -b "$JAR" "$API/relationships/types" | python3 -c "import sys,json; d=json.load(sys.stdin); assert {t['code'] for t in d['types']}=={'depends_on','hosts','connects_to','uses','provides_service_to','member_of'}, d"
+
+          echo "create asset A and asset B -> 201"
+          A=$(curl -s -b "$JAR" -H "$ORIGIN" -H "$CT" -d '{"name":"ci-topo-a","asset_type":"Application","environment":"Test","criticality":"Low","status":"Operational"}' "$API/assets" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          B=$(curl -s -b "$JAR" -H "$ORIGIN" -H "$CT" -d '{"name":"ci-topo-b","asset_type":"Database","environment":"Test","criticality":"Low","status":"Operational"}' "$API/assets" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+          echo "self-link is rejected -> 422"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "$ORIGIN" -H "$CT" -d "{\"source_asset_id\":\"$A\",\"target_asset_id\":\"$A\",\"relationship_type\":\"depends_on\"}" "$API/relationships")" = "422"
+
+          echo "create relationship A depends_on B -> 201"
+          REL=$(curl -s -b "$JAR" -H "$ORIGIN" -H "$CT" -d "{\"source_asset_id\":\"$A\",\"target_asset_id\":\"$B\",\"relationship_type\":\"depends_on\"}" "$API/relationships" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          test -n "$REL"
+
+          echo "duplicate identical edge -> 409"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "$ORIGIN" -H "$CT" -d "{\"source_asset_id\":\"$A\",\"target_asset_id\":\"$B\",\"relationship_type\":\"depends_on\"}" "$API/relationships")" = "409"
+
+          echo "asset-scoped grouped read -> A has 1 outgoing, B has 1 incoming"
+          curl -s -b "$JAR" "$API/assets/$A/relationships" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['counts']=={'outgoing':1,'incoming':0,'total':1}, d"
+          curl -s -b "$JAR" "$API/assets/$B/relationships" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['counts']=={'outgoing':0,'incoming':1,'total':1}, d"
+
+          echo "topology subgraph rooted at A -> both nodes + the edge (PostgreSQL-backed read path)"
+          curl -s -b "$JAR" "$API/topology/subgraph?root_asset_id=$A&depth=1" | python3 -c "import sys,json; d=json.load(sys.stdin); ids={n['id'] for n in d['nodes']}; assert {'$A','$B'} <= ids, d; assert any(e['id']=='$REL' for e in d['edges']), d"
+
+          echo "impact of B failing -> A is affected"
+          curl -s -b "$JAR" "$API/topology/assets/$B/impact" | python3 -c "import sys,json; d=json.load(sys.stdin); assert any(a['asset']['id']=='$A' for a in d['affected_assets']), d"
+
+          echo "full topology rebuild projects the edge into Neo4j"
+          docker compose run --rm sync-topology | tee /tmp/sync1.txt
+          grep -Eq 'relationships upserted: +[1-9]' /tmp/sync1.txt
+          docker compose exec -T neo4j cypher-shell -u neo4j -p change_me_for_local_development --format plain \
+            "MATCH (a:Asset {id: '$A'})-[r]->(b:Asset {id: '$B'}) RETURN count(r) AS c;" | tail -n1 | grep -q '^1$'
+
+          echo "delete the relationship -> 200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "$ORIGIN" -X DELETE "$API/relationships/$REL")" = "200"
+
+          echo "topology no longer returns the edge (canonical PostgreSQL reflects the delete immediately)"
+          curl -s -b "$JAR" "$API/topology/subgraph?root_asset_id=$A&depth=1" | python3 -c "import sys,json; d=json.load(sys.stdin); assert not any(e['id']=='$REL' for e in d['edges']), d"
+
+          echo "the DELETE route's best-effort incremental sync already removed the edge from Neo4j (no rebuild needed)"
+          docker compose exec -T neo4j cypher-shell -u neo4j -p change_me_for_local_development --format plain \
+            "MATCH (a:Asset {id: '$A'})-[r]->(b:Asset {id: '$B'}) RETURN count(r) AS c;" | tail -n1 | grep -q '^0$'
+
+          echo "a full rebuild afterwards is a stable no-op (idempotent - nothing left to prune)"
+          docker compose run --rm sync-topology | tee /tmp/sync2.txt
+          grep -Eq 'stale edges removed: +0' /tmp/sync2.txt
+
+          echo "the relationship mutations are in the audit log"
+          curl -s -b "$JAR" "$API/audit?entity_type=Relationship" | python3 -c "import sys,json; acts={e['action'] for e in json.load(sys.stdin)['items']}; assert {'CREATE','DELETE'} <= acts, acts"
+
+      - name: Neo4j outage graceful degradation smoke test
+        run: |
+          set -euo pipefail
+          API=http://localhost:8000/api/v1
+          ORIGIN='Origin: http://localhost:3000'
+          CT='Content-Type: application/json'
+          JAR=/tmp/outage-cookies.txt
+          CREDS='{"email":"ci-admin@example.com","password":"a-ci-only-passphrase"}'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -c "$JAR" -H "$ORIGIN" -H "$CT" -d "$CREDS" "$API/auth/login")" = "200"
+
+          echo "stop Neo4j"
+          docker compose stop neo4j
+
+          echo "topology health reports unavailable, never operational"
+          curl -s -b "$JAR" "$API/topology/health" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='unavailable', d"
+
+          echo "the Assets API is unaffected by the Neo4j outage"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" "$API/assets")" = "200"
+
+          echo "relationship CRUD and the PostgreSQL-backed topology API keep working"
+          A=$(curl -s -b "$JAR" -H "$ORIGIN" -H "$CT" -d '{"name":"ci-outage-a","asset_type":"Application","environment":"Test","criticality":"Low","status":"Operational"}' "$API/assets" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          B=$(curl -s -b "$JAR" -H "$ORIGIN" -H "$CT" -d '{"name":"ci-outage-b","asset_type":"Database","environment":"Test","criticality":"Low","status":"Operational"}' "$API/assets" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "$ORIGIN" -H "$CT" -d "{\"source_asset_id\":\"$A\",\"target_asset_id\":\"$B\",\"relationship_type\":\"depends_on\"}" "$API/relationships")" = "201"
+          curl -s -b "$JAR" "$API/topology/subgraph?root_asset_id=$A&depth=1" | python3 -c "import sys,json; d=json.load(sys.stdin); ids={n['id'] for n in d['nodes']}; assert {'$A','$B'} <= ids, d"
+
+          echo "restart Neo4j and resync -> operational again"
+          docker compose start neo4j
+          for _ in $(seq 1 30); do
+            docker compose exec -T neo4j wget -q --spider http://localhost:7474 && break
+            sleep 2
+          done
+          docker compose run --rm sync-topology
+          curl -s -b "$JAR" "$API/topology/health" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='operational', d"
 
       # Runs LAST so the curated dataset never perturbs the precise assertions
       # above. This is a throwaway CI database, not the developer's volume.
