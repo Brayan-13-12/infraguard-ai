@@ -98,10 +98,12 @@ def db_session(engine: Engine) -> Iterator[Session]:
 @pytest.fixture
 def client(db_session: Session) -> Iterator[TestClient]:
     from app.api.deps import reset_rate_limiters
+    from app.api.v1.routes.ai import reset_ai_rate_limiter
     from app.db.session import get_db
     from app.main import app
 
     reset_rate_limiters()
+    reset_ai_rate_limiter()
 
     def _override_get_db() -> Iterator[Session]:
         yield db_session
@@ -113,6 +115,7 @@ def client(db_session: Session) -> Iterator[TestClient]:
         yield test_client
     app.dependency_overrides.clear()
     reset_rate_limiters()
+    reset_ai_rate_limiter()
 
 
 _PW = "a-perfectly-fine-passphrase"

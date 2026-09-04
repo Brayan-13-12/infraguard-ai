@@ -67,10 +67,21 @@ PERMISSION_CATALOG: tuple[PermissionDef, ...] = (
     # Roles
     PermissionDef("roles.read", "roles", "List and view roles and the permission catalog"),
     PermissionDef("roles.manage", "roles", "Create, edit and delete custom roles"),
+    # AI Assistant (read-only intelligence; each AI tool still enforces the
+    # underlying domain permission - ``ai.use`` alone grants no data access).
+    PermissionDef("ai.use", "ai", "Use the AI Assistant to ask about infrastructure data"),
 )
 
 #: Ordered groups for the frontend permission matrix.
-PERMISSION_GROUPS: tuple[str, ...] = ("assets", "incidents", "audit", "trash", "users", "roles")
+PERMISSION_GROUPS: tuple[str, ...] = (
+    "assets",
+    "incidents",
+    "audit",
+    "trash",
+    "users",
+    "roles",
+    "ai",
+)
 
 ALL_PERMISSION_CODES: frozenset[str] = frozenset(p.code for p in PERMISSION_CATALOG)
 
@@ -107,10 +118,13 @@ _OPERATOR_PERMS = frozenset(
         "incidents.resolve",
         "trash.read",
         "trash.restore",
+        "ai.use",
     }
 )
-_ANALYST_PERMS = frozenset({"assets.read", "incidents.read", "audit.read", "trash.read"})
-_VIEWER_PERMS = frozenset({"assets.read", "incidents.read"})
+_ANALYST_PERMS = frozenset(
+    {"assets.read", "incidents.read", "audit.read", "trash.read", "ai.use"}
+)
+_VIEWER_PERMS = frozenset({"assets.read", "incidents.read", "ai.use"})
 
 #: Built-in roles. **Administrator always holds every catalog permission** - it is
 #: computed from :data:`ALL_PERMISSION_CODES`, so a newly introduced permission is

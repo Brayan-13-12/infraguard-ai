@@ -35,7 +35,7 @@ def test_system_role_permission_sets_are_subsets_of_the_catalog() -> None:
 
 def test_operator_can_operate_but_not_administer() -> None:
     operator = next(r for r in rbac.SYSTEM_ROLES if r.slug == "operator").permissions
-    assert {"assets.create", "incidents.resolve", "trash.restore"} <= operator
+    assert {"assets.create", "incidents.resolve", "trash.restore", "ai.use"} <= operator
     assert operator.isdisjoint(
         {"users.manage", "roles.manage", "assets.delete", "incidents.delete"}
     )
@@ -43,12 +43,24 @@ def test_operator_can_operate_but_not_administer() -> None:
 
 def test_analyst_is_read_only_plus_audit() -> None:
     analyst = next(r for r in rbac.SYSTEM_ROLES if r.slug == "analyst")
-    assert analyst.permissions == {"assets.read", "incidents.read", "audit.read", "trash.read"}
+    assert analyst.permissions == {
+        "assets.read",
+        "incidents.read",
+        "audit.read",
+        "trash.read",
+        "ai.use",
+    }
 
 
 def test_viewer_is_read_only_no_audit_no_trash() -> None:
     viewer = next(r for r in rbac.SYSTEM_ROLES if r.slug == "viewer")
-    assert viewer.permissions == {"assets.read", "incidents.read"}
+    assert viewer.permissions == {"assets.read", "incidents.read", "ai.use"}
+    assert viewer.permissions.isdisjoint({"audit.read", "trash.read"})
+
+
+def test_every_system_role_can_use_ai() -> None:
+    for role in rbac.SYSTEM_ROLES:
+        assert "ai.use" in role.permissions, role.slug
 
 
 def test_default_role_is_viewer() -> None:

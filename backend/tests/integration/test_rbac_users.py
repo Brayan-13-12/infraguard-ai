@@ -61,7 +61,7 @@ def test_user_detail_shows_effective_permission_union(auth_client: TestClient, m
     )
     detail = auth_client.get(f"{USERS}/{u['id']}").json()
     assert set(detail["permissions"]) == {
-        "assets.read", "incidents.read", "audit.read", "trash.read", "assets.update",
+        "assets.read", "incidents.read", "audit.read", "trash.read", "assets.update", "ai.use",
     }
 
 

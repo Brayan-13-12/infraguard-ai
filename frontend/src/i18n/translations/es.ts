@@ -970,6 +970,7 @@ const es = {
       trash: "Papelera",
       users: "Usuarios",
       roles: "Roles",
+      ai: "Asistente de IA",
     },
     permissionLabels: {
       assets: {
@@ -1000,7 +1001,96 @@ const es = {
         read: "Ver roles y el catálogo de permisos",
         manage: "Crear, editar y eliminar roles personalizados",
       },
+      ai: {
+        use: "Usar el Asistente de IA para consultar datos de infraestructura",
+      },
     },
+  },
+  ai: {
+    title: "AI Assistant",
+    subtitle: "Inteligencia basada en tus datos de InfraGuard",
+    readOnlyBadge: "Solo lectura",
+    newConversation: "Nueva conversación",
+    conversations: "Conversaciones",
+    noConversations: "Aún no tienes conversaciones.",
+    today: "Hoy",
+    earlier: "Anteriores",
+    deleteConversation: "Eliminar conversación",
+    deleteConfirmTitle: "¿Eliminar esta conversación?",
+    deleteConfirmBody:
+      "Se eliminará «{title}» y todos sus mensajes. Esta acción no se puede deshacer.",
+    deleteConfirm: "Eliminar",
+    deletedToast: "Conversación eliminada.",
+    empty: {
+      title: "¿Qué quieres investigar?",
+      subtitle:
+        "Pregunta en lenguaje natural sobre tus activos, incidentes y cambios recientes. "
+        + "Las respuestas se basan en datos reales de InfraGuard y respetan tus permisos.",
+    },
+    suggestions: {
+      criticalAssets: "Activos críticos de producción",
+      openIncidents: "Incidentes abiertos",
+      recentChanges: "Cambios recientes",
+      riskOverview: "Panorama de riesgo",
+    },
+    contextBanner: "Contexto: {label}",
+    contextUnavailable: "Contexto no disponible (sin permiso o en la papelera)",
+    contextSuggestions: {
+      assetSummary: "Resume este activo",
+      assetIncidents: "¿Qué incidentes lo han afectado?",
+      assetChanges: "¿Qué cambios recientes tiene?",
+      incidentSummary: "Resume este incidente",
+      incidentAssets: "¿Qué activos están afectados?",
+      incidentTimeline: "Muéstrame su cronología",
+    },
+    composer: {
+      placeholder: "Pregunta sobre tu infraestructura…",
+      send: "Enviar",
+      sending: "Enviando…",
+      hint: "Enter para enviar · Shift+Enter para salto de línea",
+      charCount: "{count} / {max}",
+      tooLong: "El mensaje supera el máximo de {max} caracteres.",
+    },
+    thinking: "Analizando tus datos…",
+    roleUser: "Tú",
+    roleAssistant: "InfraGuard AI",
+    evidence: {
+      heading: "Fuentes",
+      assets: "Activos",
+      incidents: "Incidentes",
+      audit: "Auditoría",
+      incident_timeline: "Cronología del incidente",
+      dashboard: "Panorama de infraestructura",
+      records: "{count} registro",
+      recordsPlural: "{count} registros",
+    },
+    card: {
+      viewAsset: "Ver activo",
+      viewIncident: "Ver incidente",
+      viewAuditEvent: "Ver evento",
+      openIncidents: "{count} incidente abierto",
+      openIncidentsPlural: "{count} incidentes abiertos",
+      affectedAssets: "{count} activo afectado",
+      affectedAssetsPlural: "{count} activos afectados",
+    },
+    errors: {
+      loadConversations: "No se pudieron cargar las conversaciones.",
+      loadConversation: "No se pudo cargar la conversación.",
+      notFound: "Esta conversación no existe o no es tuya.",
+      send: "No se pudo enviar el mensaje. Inténtalo de nuevo.",
+      providerUnavailable:
+        "El proveedor de IA no está disponible ahora mismo. Inténtalo de nuevo.",
+      providerTimeout: "El proveedor de IA tardó demasiado en responder.",
+      rateLimited: "Has enviado muchos mensajes. Espera un momento e inténtalo de nuevo.",
+      forbidden: "No tienes permiso para usar el Asistente de IA.",
+      unreachable: "No se pudo conectar con el servidor.",
+      retry: "Reintentar",
+    },
+    providerNotReady:
+      "El proveedor de IA configurado no está listo. El Asistente responderá cuando "
+      + "se configure una clave de API válida.",
+    askAiAsset: "Preguntar a la IA",
+    analyzeIncident: "Analizar con IA",
   },
 };
 

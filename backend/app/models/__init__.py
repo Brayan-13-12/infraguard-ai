@@ -7,6 +7,12 @@
   and the ``IncidentEvent`` timeline.
 """
 
+from app.models.ai import (
+    AIContextType,
+    AIConversation,
+    AIMessage,
+    AIMessageRole,
+)
 from app.models.asset import (
     Asset,
     AssetStatus,
@@ -38,6 +44,10 @@ from app.models.rbac import (
 from app.models.user import AccountStatus, User
 
 __all__ = [
+    "AIContextType",
+    "AIConversation",
+    "AIMessage",
+    "AIMessageRole",
     "AccountStatus",
     "Asset",
     "AssetStatus",

@@ -77,7 +77,13 @@ export const NAV_ITEMS: NavItem[] = [
     status: "active",
     permission: [...ADMIN_PERMISSIONS] as Permission[],
   },
-  { label: "AI Assistant", href: "/ai", icon: SparklesIcon, status: "soon" },
+  {
+    label: "AI Assistant",
+    href: "/ai",
+    icon: SparklesIcon,
+    status: "active",
+    permission: "ai.use",
+  },
   { label: "Settings", href: "/settings", icon: SettingsIcon, status: "soon" },
 ];
 

@@ -6,6 +6,7 @@ import {
   IncidentLifecycleActions,
   MoveIncidentToTrashButton,
 } from "@/components/incidents/IncidentDetail";
+import { AskAiButton } from "@/components/ai/AskAiButton";
 import { IncidentDetailLoader } from "@/components/incidents/IncidentDetailLoader";
 import { InTrashNotice } from "@/components/trash/InTrashNotice";
 import { Button } from "@/components/ui/Button";
@@ -54,9 +55,12 @@ export function IncidentDetailWorkspace({ id }: { id: string }) {
         );
 
         const footer = incident ? (
-          <div className="flex items-center justify-between gap-3">
-            <MoveIncidentToTrashButton incident={incident} onDeleted={close} />
-            <IncidentLifecycleActions incident={incident} onChanged={setIncident} />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <AskAiButton entity={{ type: "incident", id: incident.id }} />
+            <div className="flex items-center gap-3">
+              <MoveIncidentToTrashButton incident={incident} onDeleted={close} />
+              <IncidentLifecycleActions incident={incident} onChanged={setIncident} />
+            </div>
           </div>
         ) : undefined;
 

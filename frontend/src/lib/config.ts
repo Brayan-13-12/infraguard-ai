@@ -69,6 +69,15 @@ export const TRASH_ASSETS_PAGE_SIZE = 20;
 export const TRASH_INCIDENTS_PAGE_SIZE = 15;
 export const TRASH_MAX_PAGE_SIZE = 100;
 
+/** AI Assistant API (read-only, grounded, permission-aware - AI milestone v1). */
+export const AI_ENDPOINT = `${v1}/ai`;
+
+/** AI conversation list page size (mirrors app/schemas/ai.py). */
+export const AI_CONVERSATIONS_PAGE_SIZE = 30;
+
+/** Fallback max message length; the real value comes from `/ai/capabilities`. */
+export const AI_MESSAGE_MAX_LENGTH = 4000;
+
 /** Audit log API (read-only, append-only - Governance & Administration Phase 1). */
 export const AUDIT_ENDPOINT = `${v1}/audit`;
 

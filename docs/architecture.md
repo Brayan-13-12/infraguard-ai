@@ -23,11 +23,16 @@
 >   for Assets & Incidents, the dedicated Trash API, the `/trash` recovery
 >   module, audit `DELETE` / `RESTORE`. (Section 18a.)
 > * **Governance P3 - RBAC & User Administration:** `permissions` / `roles` /
->   `user_roles` / `role_permissions`, a 16-permission catalog, four system roles,
+>   `user_roles` / `role_permissions`, a 17-permission catalog, four system roles,
 >   backend-enforced `require_permission` guards, the `account_status` lifecycle +
 >   access-request approval flow, the explicit `bootstrap_admin` command,
 >   last-admin lockout protection, the `/admin` Users / Access-requests / Roles
 >   module. (Section 18b.)
+> * **AI Assistant - v1:** read-only grounded intelligence over real InfraGuard
+>   data - `ai.use` + per-tool domain permissions, an allow-listed read-only tool
+>   layer, `ai_conversations` / `ai_messages` with strict per-user ownership, a
+>   provider abstraction with a no-API-key deterministic default, the `/ai`
+>   workspace. (Section 18d.)
 
 ## 1. Project purpose
 
@@ -1379,8 +1384,8 @@ incident never affects an asset and vice-versa.
 
 ### Frontend
 
-A fifth **active** nav item **`Trash`** (English), between `Audit` and the
-disabled `AI Assistant`. `/trash` is a URL-backed tabbed recovery workspace
+A fifth **active** nav item **`Trash`** (English), between `Audit` and
+`Administration`. `/trash` is a URL-backed tabbed recovery workspace
 (`?type=assets|incidents`) with a thin summary strip (no KPI cards), collapsible
 server-side filters mirrored to the URL, real pagination, and desktop-table /
 mobile-card lists whose only row actions are **View** and **Restore** (no Edit
@@ -1422,23 +1427,29 @@ User ── user_roles ──▶ Role ── role_permissions ──▶ Permissi
 FKs cascade on delete except `user_roles.assigned_by`. Reverse-lookup indexes on
 `user_roles.role_id` and `role_permissions.permission_id`.
 
-### Permission catalog (16)
+### Permission catalog (17)
 
 `app/services/rbac.PERMISSION_CATALOG` is the single source of truth (also drives
 the frontend matrix). Groups: **assets** (`read`/`create`/`update`/`delete`),
 **incidents** (`read`/`create`/`update`/`resolve`/`delete`), **audit** (`read`),
 **trash** (`read`/`restore`), **users** (`read`/`manage`), **roles**
-(`read`/`manage`). `trash.purge` is *reserved and documented* — not seeded, no
-endpoint — for a future RBAC-gated "empty Trash".
+(`read`/`manage`), **ai** (`use`). `trash.purge` is *reserved and documented* —
+not seeded, no endpoint — for a future RBAC-gated "empty Trash". `ai.use` (added
+with the AI Assistant, §18d) gates the Assistant; every AI tool additionally
+enforces the underlying domain read permission.
 
 ### System roles + default matrix
 
 | Role | Permissions | Notes |
 | --- | --- | --- |
 | **Administrator** | **every** catalog permission (computed from `ALL_PERMISSION_CODES`) | so a future permission is granted automatically the moment its migration seeds it |
-| **Operator** | assets `read`/`create`/`update`, incidents `read`/`create`/`update`/`resolve`, trash `read`/`restore` | no `*.delete`, no user/role admin |
-| **Analyst** | assets `read`, incidents `read`, `audit.read`, `trash.read` | read-only + audit |
-| **Viewer** | assets `read`, incidents `read` | read-only; pre-selected (not auto-assigned) in the approve dialog |
+| **Operator** | assets `read`/`create`/`update`, incidents `read`/`create`/`update`/`resolve`, trash `read`/`restore`, `ai.use` | no `*.delete`, no user/role admin |
+| **Analyst** | assets `read`, incidents `read`, `audit.read`, `trash.read`, `ai.use` | read-only + audit |
+| **Viewer** | assets `read`, incidents `read`, `ai.use` | read-only; pre-selected (not auto-assigned) in the approve dialog |
+
+All four system roles carry `ai.use` — the AI Assistant is available to every
+user, and each AI tool is separately gated on the domain read permission the
+caller already has (or lacks).
 
 System roles are **immutable through the API** (identity + permissions owned by
 code, re-synced by `ensure_system_roles` on every seed) and cannot be deleted.
@@ -1627,6 +1638,166 @@ Regenerating demo data is a **seed**, never a database reset. `run_seed(db)`:
   Dashboard charts are meaningful. Data lives in `app/seeds/assets.py` /
   `incidents.py`; it is **not** a test fixture.
 
+The demo seed is **not** extended with AI conversations — private per-user chat
+history is not demo data. The existing assets / incidents / audit records are
+what the deterministic AI provider grounds its answers in.
+
+## 18d. AI Assistant (read-only infrastructure intelligence — v1)
+
+### Principle
+
+A grounded, permission-aware assistant over the caller's **real** InfraGuard
+data — deliberately *not* "just another chat UI". **v1 is strictly read-only**:
+no AI path creates, updates, deletes, restores or re-permissions anything,
+approves access requests, touches Trash or Audit, or bypasses RBAC. A future,
+explicitly-confirmed **action layer** owns mutations.
+
+Three invariants shape the design:
+
+1. **Grounding.** Infrastructure questions are answered only from data retrieved
+   through tools. No answer from model memory; unknown entities are not invented;
+   every answer exposes its evidence.
+2. **Authorization at the tool boundary, in code.** `ai.use` gates the feature;
+   each tool separately requires its domain permission, checked in Python before
+   the tool runs — never delegated to prompt text.
+3. **Provider independence.** No SaaS model is hard-wired. The default provider
+   needs no API key and uses the real database.
+
+### Data model & migration
+
+`f6a7b8c9d0e1` (revises `e5f6a7b8c9d0`) adds two tables:
+
+* **`ai_conversations`** — `id`, `user_id` → `users.id` `ON DELETE CASCADE`,
+  `title` (`CHECK char_length > 0`), nullable `context_type` / `context_id`
+  (loose reference, no FK) with `CHECK`s keeping them enum-valid and
+  set-together, `created_at` / `updated_at`, index `(user_id, updated_at)`.
+* **`ai_messages`** — `id`, `conversation_id` → `ai_conversations.id`
+  `ON DELETE CASCADE`, `role` (`CHECK IN ('user','assistant')`), `content`
+  (`CHECK` non-empty), bounded sanitised `metadata` JSONB, `created_at` with
+  **both** a Python `default` and a `server_default` (deterministic turn order
+  even under the savepoint-per-test transaction), index
+  `(conversation_id, created_at)`.
+
+`upgrade` re-runs `seed_rbac` (adds `ai.use`, grants it to the four system
+roles); `downgrade` drops both tables and leaves the additive permission row.
+Validated `upgrade → check → downgrade → upgrade` on `db-test`.
+
+**Ownership is strict.** A user only ever reads their own conversations — a
+non-owner (Administrator included) gets `404`, never `403` and never another
+user's content. `DELETE` is a **real delete** (documented): private AI history is
+not routed through the operational Trash module. Nothing provider-side is
+persisted — no raw payloads, no keys, no tokens.
+
+### Service architecture (`app/services/ai/`)
+
+```
+conversations.py   ownership-scoped CRUD; derive_title() — deterministic, no LLM
+context.py         resolve an asset/incident context: permission + liveness checked
+tools.py           THE SECURITY BOUNDARY — allow-listed read-only tools
+orchestrator.py    run_turn(): persist user msg → commit → provider → persist reply
+providers/         base.py (ABC + SYSTEM_BOUNDARY) · deterministic.py · openai.py
+```
+
+**Tool layer.** A frozen registry of 10 tools (`search_assets`, `get_asset`,
+`summarize_assets`, `get_dashboard_overview` → `assets.read`; `search_incidents`,
+`get_incident`, `summarize_incidents`, `get_incident_timeline` →
+`incidents.read`; `search_audit`, `get_audit_event` → `audit.read`). Each has a
+Pydantic input model (`extra="forbid"`, every field bounded), one required
+permission, and a `run()` that reuses the existing domain services and returns a
+bounded `ToolResult` (data + evidence + entity refs). Serialisers are
+**whitelists** — no user, hash, token or secret field can leave. There is **no**
+arbitrary-SQL / raw-query / generic-HTTP / shell / filesystem / mutation tool
+(asserted by a test). `ToolExecutor(db, permissions)` raises
+`ToolPermissionError` for any tool whose permission the caller lacks, *before*
+running it.
+
+**Orchestrator.** Persists the user message and derives the title, then
+**commits** — the DB write transaction is not held open across the provider
+call. It builds a bounded history window and calls `provider.generate()` with a
+`ToolExecutor`. On success it persists the assistant message + sanitised metadata
+(provider name, evidence, entities, suggestions) and commits. On
+`ProviderTimeout` / `ProviderUnavailable` / `ProviderUnsupported` / `ToolError`
+it rolls back and raises a typed `AIError`; the route maps it to
+`503 {detail:{code,message}}`. A provider failure never fabricates a successful
+assistant turn — the user message stays for retry.
+
+A failed turn leaves a **dangling user message** (no assistant reply). When the
+next turn starts, the orchestrator removes a trailing unanswered `user` message
+before appending the new one, so a **retry regenerates that turn** instead of
+stacking a second identical user message. The frontend mirrors this on its own
+optimistic state (one client-only optimistic bubble, replaced by the canonical
+server messages on success, never rendered alongside them — reconciliation is
+identity/position based, never by comparing message text, so two deliberately
+identical consecutive messages both remain visible).
+
+### Provider abstraction
+
+`AI_PROVIDER` (`deterministic` | `openai`), `AI_MODEL`, `AI_API_KEY` (+
+`AI_OPENAI_BASE_URL`, `AI_REQUEST_TIMEOUT_SECONDS`). **API keys are backend-only
+— never exposed to the frontend.** `get_provider()` is `lru_cache`d.
+
+* **`DeterministicProvider`** (default) — `ready` always `True`, **no API key**.
+  Normalises the message (strip accents, lowercase), matches a *documented* set
+  of intents (asset / incident summary · search · critical · inactive; open /
+  critical incidents; asset↔incident relationship; recent audit changes;
+  context-scoped asset / incident questions), runs the **real** tools against the
+  **real** database, and returns a grounded Spanish answer. It also handles a
+  small **product/help intent** — *"¿Qué es InfraGuard AI?"*, *"¿Qué puedes
+  hacer?"*, *"¿En qué me puedes ayudar?"* and Spanish variants — with a static
+  description of the platform and a capability list **scoped to the caller's
+  permissions** (derived from `ToolExecutor.can`, not a duplicate of RBAC); that
+  answer is not a data lookup, so it carries no evidence or entities. Anything
+  outside every intent → *"Esta consulta requiere un proveedor de IA
+  avanzado…"*. It never fabricates an entity or a fact. This is what **tests,
+  Docker and CI** use.
+* **`OpenAIProvider`** (optional) — stdlib `urllib` (no new runtime dependency),
+  tool schemas generated from each input model, a bounded tool-call loop, the
+  `SYSTEM_BOUNDARY` system prompt, transport errors mapped to
+  `ProviderTimeout` / `ProviderUnavailable`. `ready = bool(api_key)`; when not
+  ready the Assistant degrades gracefully and the rest of InfraGuard is
+  unaffected.
+
+### Prompt / tool-injection posture
+
+User messages are untrusted input. The guarantee is code, not the prompt: the
+executor authorises every tool call by permission set; whitelist serialisers
+bound what leaves the DB; the route never serialises secrets, hashes, tokens,
+env vars, SQL, stack traces or hidden prompts. `SYSTEM_BOUNDARY` additionally
+*instructs* the model to refuse "ignore your rules" / "show the DB password" /
+"run DELETE" / "read another user's conversations" style requests, but removing
+that text would not create a vulnerability. An integration test asserts a Viewer
+cannot obtain Audit data by asking the Assistant.
+
+### Rate limiting & auditing
+
+A dedicated per-user `RateLimiter` keyed `ai-message:{user_id}`
+(`AI_RATE_LIMIT_*`, default 20 / 60 s) — stricter than ordinary reads, typed
+`429` + `Retry-After`. **AI activity writes no audit events in v1** (documented):
+it performs no mutations to correlate, conversation content is already
+owner-visible, and the app does not audit direct reads either. Revisit with the
+action layer.
+
+### Frontend
+
+`/ai` is a `RequirePermission("ai.use")` route rendering `AiWorkspace` — a
+first-class workspace (conversation rail + conversation + composer; the rail
+becomes a `Drawer` on narrow screens), **not** a floating bubble or a ChatGPT
+clone. Deterministic titles, an empty state (*"¿Qué quieres investigar?"* +
+functional suggested prompts), entity cards that reuse the existing detail
+routes, an evidence strip, and typed Spanish errors with an inline **Reintentar**
+on provider failure. Asset / incident detail expose **"Preguntar a la IA"** /
+**"Analizar con IA"** — the URL carries only the entity id (`?asset_id=` /
+`?incident_id=`); the backend re-fetches and re-authorises, so a hand-edited URL
+grants nothing. `services/ai.ts` maps `503 {detail:{code}}` → provider error
+kinds; no API key ever reaches the browser.
+
+### Explicit non-goals (v1)
+
+AI mutations / an action layer, autonomous or background agents, scheduled AI
+jobs, auto-resolution, RAG / vector DB / embeddings / pgvector, web browsing,
+voice, file uploads, image generation, multi-agent orchestration,
+LangChain / LlamaIndex, streaming responses.
+
 ## 18. Future direction
 
 Later, dedicated feature branches are expected to add:
@@ -1635,10 +1806,13 @@ Later, dedicated feature branches are expected to add:
   delete + **Trash**, §18a) and Phase 3 (**RBAC & User Administration**, §18b)
   have shipped; next: **permanent purge** of trashed records (`trash.purge`),
   audit **retention** policy, resource-/row-level authorization
+- **AI Assistant** — v1 (read-only grounded intelligence, §18d) has shipped;
+  next: an explicitly-confirmed **action layer** (guarded, audited AI-initiated
+  changes), streaming responses, retrieval over documentation
 - refresh tokens + revocation; password reset; email verification; OAuth; MFA;
   SSO/OIDC; teams / groups; temporary permissions
 - The InfraGuard domain model (assets, services, dependencies, incidents)
-- **Neo4j** dependency graph · **AI providers** for incident analysis / RAG
+- **Neo4j** dependency graph
 - **Kubernetes** + **Helm**, with Secrets / an external secret manager
 - **CI/CD** (security scan, image publish, deploy) · **Observability**
 
@@ -1650,8 +1824,9 @@ graph LR
     audit --> trash["Governance P2<br/>(Trash / Restore)"]
     trash --> rbac["Governance P3<br/>(RBAC & User Admin)"]
     rbac --> gov["Governance P4+<br/>(purge, retention)"]
+    rbac --> ai["AI Assistant v1<br/>(read-only)"]
+    ai --> aiact["AI action layer<br/>(guarded, audited)"]
     domain --> graph["Neo4j<br/>dependency graph"]
-    domain --> ai["AI incident analysis"]
     domain --> k8s["Kubernetes + Helm"]
     k8s --> cicd["CI/CD + scanning"]
     k8s --> obs["Observability"]

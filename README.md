@@ -121,6 +121,14 @@ non-secret fallback defaults, so it starts without a `.env` file.
 | `JWT_SECRET` | HS256 signing secret (`>= 32` chars in production; never a `NEXT_PUBLIC_*`) |
 | `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | Interactive session lifetime (default **30**). Drives both the JWT `exp` and the cookie `Max-Age`. |
 | `AUTH_COOKIE_SECURE` / `AUTH_COOKIE_SAMESITE` | Auth cookie flags (`Secure` derived from env if unset) |
+| `AI_PROVIDER` | `deterministic` (default, no key, real DB) or `openai` |
+| `AI_MODEL` | Model id passed to the provider (default `infraguard-deterministic-v1`) |
+| `AI_API_KEY` | Provider API key - **backend only**, never a `NEXT_PUBLIC_*`. Unset ⇒ a real provider reports "not ready" and the Assistant degrades gracefully |
+| `AI_OPENAI_BASE_URL` | OpenAI-compatible base URL (default `https://api.openai.com/v1`) |
+| `AI_REQUEST_TIMEOUT_SECONDS` | Provider call timeout (`0 < t <= 120`, default 30) |
+| `AI_MESSAGE_MAX_LENGTH` | Max user-message length (default 4000) |
+| `AI_MAX_TOOL_RESULTS` / `AI_HISTORY_WINDOW` | Bounded tool result rows / replayed history turns |
+| `AI_RATE_LIMIT_MAX_MESSAGES` / `AI_RATE_LIMIT_WINDOW_SECONDS` | Per-user AI message limiter (default 20 / 60 s) |
 
 ### Production configuration safety
 
@@ -276,13 +284,20 @@ pnpm dev
 | `GET` | `/api/v1/admin/roles/{id}` | Permissions + assigned users → `200` · `404` (needs `roles.read`) |
 | `PATCH` · `PUT` | `/api/v1/admin/roles/{id}` · `/permissions` | Rename / re-permission a **custom** role → `200` · `404` · `409` (system) · `422` (needs `roles.manage` + CSRF) |
 | `DELETE` | `/api/v1/admin/roles/{id}` | Delete an unused custom role → `200` · `404` · `409` (system / assigned) (needs `roles.manage` + CSRF) |
+| `GET` | `/api/v1/ai/capabilities` | Provider name / model / `ready`, message length limit, and the AI tool list with per-caller `available` flags → `200` (needs `ai.use`) |
+| `GET` | `/api/v1/ai/conversations` | The caller's **own** conversations, most-recently-updated first - `page` `page_size` (30, max 100) → `200` (needs `ai.use`) |
+| `POST` | `/api/v1/ai/conversations` | Start a conversation; optional `context` (`{asset_id}` \| `{incident_id}`) is re-fetched + permission-checked server-side (`404` if not visible / trashed) → `201` · `422` (needs `ai.use` + CSRF) |
+| `GET` | `/api/v1/ai/conversations/{id}` | Conversation + full message list - **owner only**, otherwise `404` → `200` (needs `ai.use`) |
+| `DELETE` | `/api/v1/ai/conversations/{id}` | Permanently delete the conversation + its messages (private history, **not** routed through Trash) - owner only → `200` · `404` (needs `ai.use` + CSRF) |
+| `POST` | `/api/v1/ai/conversations/{id}/messages` | Send a user message; runs the grounded read-only orchestrator and returns `{user_message, assistant_message}` with evidence / entity refs / suggestions → `200` · `404` · `429` (per-user) · `503 {detail:{code,message}}` (provider unavailable / timeout / unsupported) (needs `ai.use` + CSRF) |
 | `GET` | `/docs` · `/openapi.json` | Swagger UI / OpenAPI schema |
 | `GET` | `/` | Service metadata |
 
-All `/api/v1/assets*`, `/api/v1/incidents*`, `/api/v1/audit*`, `/api/v1/trash*`
-and `/api/v1/admin*` endpoints require authentication (`get_current_user`) **and
-the matching RBAC permission** (`deps.require_permission`); an authenticated
-caller lacking the permission gets **`403`** (never `401`, never a redirect).
+All `/api/v1/assets*`, `/api/v1/incidents*`, `/api/v1/audit*`, `/api/v1/trash*`,
+`/api/v1/admin*` and `/api/v1/ai*` endpoints require authentication
+(`get_current_user`) **and the matching RBAC permission**
+(`deps.require_permission`); an authenticated caller lacking the permission gets
+**`403`** (never `401`, never a redirect).
 State-changing methods also pass the `Origin`/`Referer` CSRF check. There is **no
 permanent delete** - `DELETE` is a *soft delete* that sets `deleted_at` /
 `deleted_by` and moves the record to **Trash**, from where it is fully
@@ -294,14 +309,18 @@ the authenticated user, never a request-body value.
 **Frontend visibility is not security** - every permission is enforced in the
 backend; the frontend only mirrors it.
 
-- **Permission catalog (16)**, grouped `assets` / `incidents` / `audit` /
-  `trash` / `users` / `roles` - codes like `assets.update`, `trash.restore`,
-  `users.manage`. Codes are stable machine identifiers, never translated.
-  `trash.purge` is *reserved and documented* for a future "empty Trash".
+- **Permission catalog (17)**, grouped `assets` / `incidents` / `audit` /
+  `trash` / `users` / `roles` / `ai` - codes like `assets.update`,
+  `trash.restore`, `users.manage`, `ai.use`. Codes are stable machine
+  identifiers, never translated. `trash.purge` is *reserved and documented* for a
+  future "empty Trash".
 - **System roles** (immutable, un-deletable): **Administrator** (every
   permission - and any future one automatically), **Operator** (asset + incident
   operations + restore, no `*.delete`, no admin), **Analyst** (read + audit +
-  trash read), **Viewer** (asset + incident read). Administrators can create
+  trash read), **Viewer** (asset + incident read). **All four** system roles
+  include `ai.use` - the AI Assistant is available to every user, and each AI
+  tool separately requires the underlying domain read permission. Administrators
+  can create
   fully-editable **custom roles**. Viewer is only *pre-selected* in the approve
   dialog - it is never auto-assigned.
 - **Account lifecycle** (`account_status`, single source of truth; `is_active` is
@@ -338,6 +357,68 @@ backend; the frontend only mirrors it.
   mutation is written to the audit log (`User` / `Role` entity types) -
   `CREATE` on registration, `STATUS_CHANGED` + `UPDATE` on approve / reject /
   enable / disable.
+
+### AI Assistant (read-only infrastructure intelligence)
+
+A grounded, permission-aware assistant that answers questions about **your actual
+InfraGuard data** - not a general chatbot. **v1 is strictly read-only**: no AI
+action can create, update, delete, restore or re-permission anything, approve
+access requests, touch Trash or Audit, or bypass RBAC. Those belong to a future,
+explicitly-confirmed action layer.
+
+- **Grounding.** The assistant never answers infrastructure questions from
+  memory. It retrieves data through a small **allow-listed set of read-only
+  tools** (`search_assets`, `get_asset`, `summarize_assets`,
+  `get_dashboard_overview`, `search_incidents`, `get_incident`,
+  `summarize_incidents`, `get_incident_timeline`, `search_audit`,
+  `get_audit_event`) - each with an explicit input schema, a bounded result size,
+  a required permission and **no mutation path**. There is no arbitrary SQL, no
+  raw query construction and no generic HTTP / shell / filesystem access. Every
+  answer carries **evidence** (which tools ran, over how many records) and
+  **entity references** (internal ids + safe labels) so you can see where it came
+  from.
+- **Permissions.** `ai.use` gates the Assistant; **each tool additionally
+  enforces its domain permission** (`assets.read` / `incidents.read` /
+  `audit.read`) at the tool boundary in the backend. A Viewer asking about Audit
+  gets *"no tienes permiso"*, never audit data - the frontend is not involved in
+  that decision. Users / Roles / Access-requests are **not** exposed to the AI in
+  v1.
+- **Provider abstraction.** No provider is hard-wired. `AI_PROVIDER` /
+  `AI_MODEL` / `AI_API_KEY` select the backend adapter; **keys live backend-side
+  only and are never sent to the browser**. The default (`deterministic`)
+  provider needs **no API key** and is what tests, Docker and CI use - it runs
+  the *real* tools against the *real* database, uses simple intent matching, and
+  answers a bounded set of documented intents (asset / incident lookups and
+  summaries, relationships, timelines, recent Audit changes, an infrastructure
+  overview, plus a small **"what is InfraGuard AI / what can you do"** product
+  intent whose capability list is scoped to the caller's permissions). Anything
+  outside that scope returns *"Esta consulta requiere un proveedor de IA
+  avanzado…"* - it never fabricates entities or facts. An optional `openai`
+  adapter (stdlib HTTP, no new runtime dependency) sits behind the same
+  abstraction. If a configured real provider is unavailable InfraGuard stays
+  fully usable and the Assistant degrades gracefully (typed `503`; the user's
+  message stays on screen and is retryable - the retry regenerates the turn
+  rather than stacking a second copy; no fake answer).
+- **Conversations.** `ai_conversations` + `ai_messages` (roles `user` /
+  `assistant`). **Strict ownership** - a user only ever sees their own
+  conversations; Administrator status does **not** grant read access to other
+  users' private history. `DELETE` is a real delete (documented) and is **not**
+  routed through operational Trash. Titles are derived deterministically from the
+  first user message (no LLM call).
+- **Prompt / tool-injection posture.** User messages are untrusted input. The
+  backend authorises every tool call regardless of what a message says; a message
+  telling the assistant to "ignore your rules", "show the DB password", "run
+  `DELETE`", "read another user's conversations" or "use Audit without
+  permission" cannot succeed because the enforcement is in code, not in the
+  prompt. Secrets, hashes, tokens, cookies, env vars, SQL, stack traces and
+  hidden prompts are never serialised into a response or sent to a provider.
+- **Rate limiting.** AI message execution has its own **stricter per-user**
+  fixed-window limiter (`AI_RATE_LIMIT_*`, default 20 / 60 s) → typed `429` with
+  `Retry-After`, separate from ordinary reads.
+- **AI auditing decision.** AI activity does **not** write audit events in v1: it
+  performs no mutations to correlate, conversation content is already
+  user-owned + user-visible, and the app does not audit direct reads either.
+  Revisit when the action layer lands.
 
 ### Trash / soft delete (Governance Phase 2)
 
@@ -766,6 +847,33 @@ milestone.
   teams/groups, temporary permissions, deny rules, row-level authorization,
   permanent Trash purge
 
+**AI Assistant - v1 (read-only infrastructure intelligence)**
+
+- New `ai.use` permission (catalog now **17**, group `ai`); granted to **all four**
+  system roles. Each AI tool still enforces its own domain read permission at the
+  backend/tool boundary - a Viewer cannot reach Audit data through the Assistant
+- `ai_conversations` + `ai_messages` (one Alembic migration, validated
+  `upgrade → check → downgrade → upgrade`). **Strict per-user ownership** - no
+  cross-user reads, Administrators included. `DELETE` is a real delete, not Trash
+- **Provider abstraction** (`AI_PROVIDER` / `AI_MODEL` / `AI_API_KEY`, keys
+  backend-only). Default **deterministic** provider needs no API key, runs the
+  real read-only tools against the real DB, and is what tests / Docker / CI use;
+  optional `openai` adapter behind the same interface. Provider outage → typed
+  `503`, user message preserved, InfraGuard stays fully usable
+- **Allow-listed read-only tool layer** (10 tools, explicit schemas, bounded
+  results, no mutation, no raw SQL). Grounded answers only - every response
+  carries evidence + entity references; unknown entities are not invented
+- Per-user **AI message rate limit** (stricter than ordinary reads) → typed `429`
+- `AI Assistant` is now an **active**, `ai.use`-gated nav item - a first-class
+  workspace (conversation rail + conversation + composer, mobile drawer),
+  deterministic titles, entity cards that reuse existing detail routes, and
+  **"Preguntar a la IA" / "Analizar con IA"** entry points on asset / incident
+  detail (context id only; backend re-fetches + re-authorises)
+- No AI auditing in v1 (documented): read-only, nothing to correlate
+- **Explicit non-goals:** AI mutations / an action layer, autonomous or
+  background agents, RAG / vector DB / embeddings, web browsing, voice, file
+  uploads, multi-agent orchestration, LangChain / LlamaIndex
+
 ### Planned (future phases)
 
 - Governance Phase 4+: **permanent purge** of trashed records (`trash.purge`),
@@ -775,7 +883,9 @@ milestone.
 - Service & dependency modelling; asset lifecycle / obsolescence
 - Incident **impact analysis** (built on the v0.5 Incident ↔ Asset relationship)
 - Infrastructure dependency graph (Neo4j)
-- AI-assisted incident analysis (AI providers, RAG)
+- AI Assistant next steps: an explicitly-confirmed **action layer** (guarded,
+  audited AI-initiated changes), streaming responses, retrieval over
+  documentation
 - Operational dashboards
 - Kubernetes manifests + Helm chart (`infra/`), with Secrets / external secret manager
 - CI/CD pipeline with security scanning and image publishing
