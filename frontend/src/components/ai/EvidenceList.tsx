@@ -9,6 +9,8 @@ const SOURCE_KEY: Record<string, TranslationKey> = {
   audit: "ai.evidence.audit",
   incident_timeline: "ai.evidence.incident_timeline",
   dashboard: "ai.evidence.dashboard",
+  relationships: "ai.evidence.relationships",
+  topology: "ai.evidence.topology",
 };
 
 /** "Sources" strip under a grounded answer - which tools produced it. */

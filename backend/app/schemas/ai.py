@@ -92,6 +92,7 @@ class MessageCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     content: str = Field(min_length=1, max_length=settings.AI_MESSAGE_MAX_LENGTH)
+    request_id: uuid.UUID | None = None
 
     @field_validator("content")
     @classmethod
@@ -133,6 +134,7 @@ class AIMessageRead(BaseModel):
     evidence: list[AIEvidenceItem] = Field(default_factory=list)
     entities: list[AIEntityRef] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
+    tool_summary: list[str] = Field(default_factory=list)
 
 
 class ConversationContextRead(BaseModel):
@@ -192,6 +194,9 @@ class AICapabilities(BaseModel):
     #: True when the assistant can actually answer (deterministic is always
     #: ready; a real provider needs a configured key).
     ready: bool
+    configured: bool = False
+    streaming: bool = True
+    tool_calling: bool = True
     read_only: bool = True
     message_max_length: int
     tools: list[AIToolInfo]

@@ -1,5 +1,7 @@
 # InfraGuard AI - Frontend
 
+> **AI Assistant v2:** See the [current provider, streaming, security and setup guide](../docs/ai-assistant-v2.md). Historical v1 sections below describe the foundation; the v2 guide supersedes their provider, streaming and retry details.
+
 Next.js 15 (App Router) · React 19 · TypeScript (strict) · Tailwind CSS 3 · pnpm.
 
 ```bash
@@ -657,13 +659,13 @@ services/ai.ts + types/ai.ts   typed AIResult<T>, runtime guards, error-kind map
   based, never by comparing text, so two deliberately identical consecutive
   messages both stay visible.
 - **Loading & failure.** A subtle "Analizando tus datos…" indicator + disabled
-  composer while a turn runs (no full-page spinner, no fake streaming). All
+  composer while a turn runs (progressive Responses streaming in v2). All
   errors are Spanish and typed - `providerUnavailable` / `providerTimeout` /
   `rateLimited` / `notFound` / `forbidden` / `unreachable`. A provider failure
   keeps the optimistic user bubble on screen (dimmed) with an inline
   **Reintentar**; the retry regenerates that turn - the backend sweeps its
   dangling user message, so retrying never duplicates the user turn.
-- **`services/ai.ts`** - `AIResult<T>`, a 45 s request timeout, `credentials:
+- **`services/ai.ts`** - `AIResult<T>`, a 45 s JSON timeout and 150 s stream timeout, `credentials:
   "include"`, runtime type guards, `503 {detail:{code}}` → `provider_timeout` /
   `provider_unavailable`, `429` → `rate_limited`. No API key ever touches the
   frontend.

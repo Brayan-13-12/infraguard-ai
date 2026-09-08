@@ -48,6 +48,7 @@ jobs:
           --health-cmd "pg_isready -U infraguard -d infraguard_test"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
+      AI_PROVIDER: deterministic
       TEST_DATABASE_URL: postgresql+psycopg://infraguard:ci_test_only@localhost:5432/infraguard_test
       # The suite runs destructive schema ops; this disposable ephemeral CI
       # database is explicitly authorized for them (never a persistent volume).
@@ -66,7 +67,7 @@ jobs:
           pip install --no-deps -e .
       - name: Ruff
         run: ruff check .
-      - name: Unit + integration tests
+      - name: Unit + integration tests (includes offline AI v2 provider and SSE smoke)
         run: pytest -m ""
 
   frontend:

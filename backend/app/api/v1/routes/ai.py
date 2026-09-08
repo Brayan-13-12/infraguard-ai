@@ -19,10 +19,14 @@ There is deliberately **no** endpoint that mutates operational InfraGuard data.
 
 from __future__ import annotations
 
+import json
+import logging
 import uuid
 
+import anyio
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.exceptions import HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -33,7 +37,7 @@ from app.api.deps import (
 )
 from app.core.config import settings
 from app.core.ratelimit import RateLimiter
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.models.ai import AIConversation, AIMessage
 from app.models.user import User
 from app.schemas.ai import (
@@ -55,7 +59,7 @@ from app.schemas.ai import (
 )
 from app.services.ai import conversations as conv_service
 from app.services.ai.context import resolve_context, resolve_conversation_context
-from app.services.ai.orchestrator import AIError, run_turn
+from app.services.ai.orchestrator import AIError, history_allowed, run_turn, stream_turn, turn_slot
 from app.services.ai.providers import get_provider
 from app.services.ai.tools import REGISTRY
 
@@ -105,6 +109,7 @@ def _message_read(m: AIMessage) -> AIMessageRead:
         evidence=[AIEvidenceItem.model_validate(e) for e in meta.get("evidence", [])],
         entities=[AIEntityRef.model_validate(e) for e in meta.get("entities", [])],
         suggestions=list(meta.get("suggestions", [])),
+        tool_summary=list(meta.get("tool_summary", [])),
     )
 
 
@@ -136,13 +141,14 @@ def capabilities_endpoint(
         provider=provider.name,
         model=provider.model,
         ready=provider.ready,
+        configured=provider.ready,
         message_max_length=settings.AI_MESSAGE_MAX_LENGTH,
         tools=[
             AIToolInfo(
                 name=t.name,
                 description=t.description,
                 permission=t.permission,
-                available=t.permission in permissions,
+                available=all(p in permissions for p in t.required_permissions()),
             )
             for t in REGISTRY.values()
         ],
@@ -255,7 +261,7 @@ def get_conversation_endpoint(
         context=_context_read(db, conv, permissions),
         created_at=conv.created_at,
         updated_at=conv.updated_at,
-        messages=[_message_read(m) for m in messages],
+        messages=[_message_read(m) for m in messages if history_allowed(m, permissions)],
     )
 
 
@@ -274,8 +280,14 @@ def delete_conversation_endpoint(
     conv = conv_service.get_owned_conversation(db, conversation_id=conversation_id, user_id=user.id)
     if conv is None:
         raise _NOT_FOUND
-    conv_service.delete_conversation(db, conv)
-    db.commit()
+    try:
+        with turn_slot(user.id):
+            conv_service.delete_conversation(db, conv)
+            db.commit()
+    except AIError as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": exc.code, "message": exc.message}
+        ) from exc
     return MessageResponse(detail="Conversation deleted")
 
 
@@ -309,10 +321,11 @@ def send_message_endpoint(
             permissions=permissions,
             conversation=conv,
             content=payload.content,
+            request_id=payload.request_id,
         )
     except AIError as exc:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=409 if exc.code in ("turn_in_progress", "request_conflict") else 503,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
 
@@ -321,4 +334,93 @@ def send_message_endpoint(
         title=turn.conversation.title,
         user_message=_message_read(turn.user_message),
         assistant_message=_message_read(turn.assistant_message),
+    )
+
+
+def _stream_records(conversation_id, user_id, permissions, payload):
+    # This session belongs to the iterator, not FastAPI's already-finished dependency scope.
+    with SessionLocal() as db:
+        user = db.get(User, user_id)
+        conv = conv_service.get_owned_conversation(
+            db, conversation_id=conversation_id, user_id=user_id
+        )
+        if user is None or conv is None:
+            yield "turn.failed", {"code": "not_found", "message": "Conversación no disponible."}
+            return
+        iterator = stream_turn(
+            db,
+            user=user,
+            permissions=permissions,
+            conversation=conv,
+            content=payload.content,
+            request_id=payload.request_id,
+        )
+        try:
+            for kind, data in iterator:
+                if kind == "turn.started":
+                    data = {"user_message": _message_read(data).model_dump(mode="json")}
+                elif kind == "turn.completed":
+                    data = ChatResponse(
+                        conversation_id=data.conversation.id,
+                        title=data.conversation.title,
+                        user_message=_message_read(data.user_message),
+                        assistant_message=_message_read(data.assistant_message),
+                    ).model_dump(mode="json")
+                yield kind, data
+        except AIError as exc:
+            yield "turn.failed", {"code": exc.code, "message": exc.message}
+        except Exception:
+            logging.getLogger(__name__).warning("ai.stream.failed code=tool_execution_failed")
+            yield (
+                "turn.failed",
+                {
+                    "code": "tool_execution_failed",
+                    "message": "No se pudo completar la consulta. Inténtalo de nuevo.",
+                },
+            )
+        finally:
+            iterator.close()
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/stream",
+    summary="Stream a grounded answer as normalized SSE events",
+    dependencies=[Depends(require_trusted_origin), Depends(_rate_limit_messages)],
+)
+def stream_message_endpoint(
+    conversation_id: uuid.UUID,
+    payload: MessageCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    permissions: frozenset[str] = Depends(get_current_permissions),
+) -> StreamingResponse:
+    if (
+        conv_service.get_owned_conversation(db, conversation_id=conversation_id, user_id=user.id)
+        is None
+    ):
+        raise _NOT_FOUND
+    user_id = user.id
+
+    async def body():
+        iterator = _stream_records(conversation_id, user_id, permissions, payload)
+        try:
+            while True:
+                item = await anyio.to_thread.run_sync(lambda: next(iterator, None))
+                if item is None:
+                    break
+                kind, data = item
+                yield f"event: {kind}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+        finally:
+            # Shield cleanup on browser disconnect. Closing unwinds the SDK stream,
+            # session and per-user slot on the same sequential worker path.
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(iterator.close)
+
+    return StreamingResponse(
+        body(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+        },
     )

@@ -41,6 +41,8 @@ def build_provider() -> AIProvider:
             model=settings.AI_MODEL,
             base_url=settings.AI_OPENAI_BASE_URL,
             timeout=settings.AI_REQUEST_TIMEOUT_SECONDS,
+            max_rounds=settings.AI_MAX_TOOL_ROUNDS,
+            max_output_tokens=settings.AI_MAX_OUTPUT_TOKENS,
         )
     return DeterministicProvider(model=settings.AI_MODEL)
 

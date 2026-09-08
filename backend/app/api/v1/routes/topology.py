@@ -180,6 +180,7 @@ def path_endpoint(
         source_asset_id=source_asset_id,
         target_asset_id=target_asset_id,
         found=result.found,
+        truncated=result.truncated,
         nodes=[_node(a, is_root=(a.id == source_asset_id)) for a in result.nodes],
         edges=[_edge(e) for e in result.edges],
         length=len(result.edges),

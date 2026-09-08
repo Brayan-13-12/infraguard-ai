@@ -56,7 +56,11 @@ export function TopologyWorkspace() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [listView, setListView] = useState(false);
-  const [inspectorOpenMobile, setInspectorOpenMobile] = useState(false);
+  const [inspectorOpenResponsive, setInspectorOpenResponsive] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [wideInspectorLayout, setWideInspectorLayout] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(min-width: 1280px)").matches,
+  );
   const canvasRef = useRef<TopologyCanvasHandle>(null);
 
   const fetchRoot = useCallback(
@@ -90,6 +94,14 @@ export function TopologyWorkspace() {
     else setState({ kind: "empty" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusId, filters]);
+
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 1280px)");
+    const update = () => setWideInspectorLayout(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
 
   const setUrlAsset = useCallback(
     (assetId: string | null) => {
@@ -153,8 +165,16 @@ export function TopologyWorkspace() {
   }, [selectedEdge]);
 
   useEffect(() => {
-    setInspectorOpenMobile(Boolean(selectedNodeId || selectedEdgeId));
+    setInspectorOpenResponsive(Boolean(selectedNodeId || selectedEdgeId));
+    if (selectedNodeId || selectedEdgeId) setFiltersOpen(false);
   }, [selectedNodeId, selectedEdgeId]);
+
+  useEffect(() => {
+    const id = window.requestAnimationFrame(() => {
+      canvasRef.current?.fitView();
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [filtersOpen, inspectorOpenResponsive]);
 
   const counts = useMemo(() => {
     if (!selectedNodeId || state.kind !== "ready") return { incoming: 0, outgoing: 0 };
@@ -186,9 +206,9 @@ export function TopologyWorkspace() {
     ) : null;
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+    <div className="flex min-w-0 max-w-full flex-col gap-4">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">
             {t("topology.title")}
           </h1>
@@ -197,9 +217,17 @@ export function TopologyWorkspace() {
         <TopologySearch onSelect={(a) => focusAsset(a.id)} />
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <TopologyFilters value={filters} onChange={setFilters} />
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <TopologyFilters
+            value={filters}
+            onChange={setFilters}
+            open={filtersOpen}
+            onOpenChange={(open) => {
+              setFiltersOpen(open);
+              if (open) setInspectorOpenResponsive(false);
+            }}
+          />
           <Button variant="ghost" size="sm" onClick={() => canvasRef.current?.fitView()}>
             <MaximizeIcon className="h-4 w-4" />
             {t("topology.toolbar.fit")}
@@ -214,6 +242,7 @@ export function TopologyWorkspace() {
           size="sm"
           onClick={() => setListView((v) => !v)}
           aria-pressed={listView}
+          className="shrink-0"
         >
           <ListIcon className="h-4 w-4" />
           {t("topology.toolbar.listView")}
@@ -227,7 +256,7 @@ export function TopologyWorkspace() {
         </Alert>
       ) : null}
 
-      <div className="flex overflow-hidden rounded-xl border border-border bg-background h-[calc(100dvh-16rem)] min-h-[28rem] sm:h-[calc(100dvh-14rem)]">
+      <div className="flex h-[calc(100dvh-16rem)] min-h-[28rem] min-w-0 max-w-full overflow-hidden rounded-xl border border-border bg-background sm:h-[calc(100dvh-14rem)]">
         <div className="relative min-w-0 flex-1">
           {state.kind === "empty" ? (
             <EmptyTopology kind="no-focus" onSelect={(a) => focusAsset(a.id)} />
@@ -275,10 +304,10 @@ export function TopologyWorkspace() {
           )}
         </div>
 
-        {inspector ? (
+        {inspector && wideInspectorLayout ? (
           <aside
             className={cn(
-              "hidden w-80 shrink-0 overflow-y-auto border-l border-border bg-surface lg:block",
+              "hidden w-80 shrink-0 overflow-y-auto border-l border-border bg-surface xl:block",
             )}
           >
             {inspector}
@@ -287,14 +316,15 @@ export function TopologyWorkspace() {
       </div>
 
       <Drawer
-        open={inspectorOpenMobile && inspector !== null}
+        open={!wideInspectorLayout && inspectorOpenResponsive && inspector !== null}
         onClose={() => {
           setSelectedNodeId(null);
           setSelectedEdgeId(null);
         }}
         side="bottom"
         label={t("topology.inspector.title")}
-        className="lg:hidden"
+        className="xl:hidden"
+        initialFocus="a,button"
       >
         {inspector}
       </Drawer>

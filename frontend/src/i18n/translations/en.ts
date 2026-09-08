@@ -992,6 +992,14 @@ const en: Translations = {
     },
   },
   ai: {
+    sourcesConsulted: "Consulted {count} InfraGuard sources",
+    responseComplete: "Response complete. Sources are available with the message.",
+    activity: {
+      assets: "Looking up assets…",
+      incidents: "Reviewing incidents…",
+      audit: "Checking recent changes…",
+      relationships: "Analyzing dependencies…",
+    },
     title: "AI Assistant",
     subtitle: "Intelligence grounded in your InfraGuard data",
     readOnlyBadge: "Read-only",
@@ -1040,6 +1048,8 @@ const en: Translations = {
     roleUser: "You",
     roleAssistant: "InfraGuard AI",
     evidence: {
+      relationships: "Relationships",
+      topology: "Topology",
       heading: "Sources",
       assets: "Assets",
       incidents: "Incidents",

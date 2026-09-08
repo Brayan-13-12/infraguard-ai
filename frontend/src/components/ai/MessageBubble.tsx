@@ -7,6 +7,7 @@ import type { AIMessage } from "@/types/ai";
 
 import { EntityCard } from "./EntityCard";
 import { EvidenceList } from "./EvidenceList";
+import { SafeMarkdown } from "./SafeMarkdown";
 
 export function MessageBubble({
   message,
@@ -20,7 +21,7 @@ export function MessageBubble({
 
   return (
     <div className={cn("flex flex-col gap-2", isUser ? "items-end" : "items-start")}>
-      <div className={cn("flex max-w-[46rem] gap-3", isUser && "flex-row-reverse")}>
+      <div className={cn("flex w-full max-w-[46rem] gap-3", isUser && "flex-row-reverse")}>
         {!isUser ? (
           <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/12 text-primary">
             <SparklesIcon className="h-3.5 w-3.5" />
@@ -32,13 +33,13 @@ export function MessageBubble({
           </span>
           <div
             className={cn(
-              "whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
+              "whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed [overflow-wrap:anywhere]",
               isUser
                 ? "rounded-tr-sm bg-primary text-primary-foreground"
                 : "rounded-tl-sm border border-border bg-surface text-foreground",
             )}
           >
-            {message.content}
+            {isUser ? message.content : <SafeMarkdown text={message.content} />}
           </div>
 
           {!isUser && message.entities.length > 0 ? (
@@ -50,6 +51,14 @@ export function MessageBubble({
           ) : null}
 
           {!isUser ? <EvidenceList evidence={message.evidence} /> : null}
+          {!isUser && !!message.tool_summary?.length ? (
+            <details className="mt-2 text-xs text-muted-foreground">
+              <summary className="cursor-pointer">{t("ai.sourcesConsulted", { count: message.tool_summary.length })}</summary>
+              <EvidenceList evidence={message.tool_summary.map((source) => ({
+                source: source as import("@/types/ai").AIEvidenceSource, label: source, count: 1,
+              }))} />
+            </details>
+          ) : null}
 
           {!isUser && message.suggestions.length > 0 && onSuggestion ? (
             <div className="mt-2.5 flex flex-wrap gap-1.5">

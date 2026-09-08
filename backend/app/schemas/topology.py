@@ -73,6 +73,7 @@ class ImpactResponse(BaseModel):
 
 
 class PathResponse(BaseModel):
+    truncated: bool = False
     source_asset_id: uuid.UUID
     target_asset_id: uuid.UUID
     found: bool

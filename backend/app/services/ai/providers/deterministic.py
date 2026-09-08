@@ -420,8 +420,12 @@ class DeterministicProvider(AIProvider):
             return ProviderResult(
                 text=(
                     f"{a['name']}: {a['criticality']} · {a['environment']} · {a['type']}. "
-                    f"Estado {a['status']}, {a['open_incidents']} "
-                    f"{_plural(a['open_incidents'], 'incidente abierto', 'incidentes abiertos')}."
+                    f"Estado {a['status']}. "
+                    + (
+                        f"Incidentes abiertos: {a['open_incidents']}."
+                        if "open_incidents" in a
+                        else ""
+                    )
                 ),
                 suggestions=["¿Qué incidentes lo han afectado?", "¿Qué cambios recientes tiene?"],
             )
@@ -567,12 +571,13 @@ class DeterministicProvider(AIProvider):
         if not a:
             return ProviderResult(text=f"{ctx.label} ya no está disponible.")
         state = "activo" if a["is_active"] else "inactivo"
-        open_n = a["open_incidents"]
+        open_n = a.get("open_incidents", 0)
         open_label = _plural(open_n, "incidente abierto", "incidentes abiertos")
         return ProviderResult(
             text=(
                 f"{a['name']} es un activo {a['criticality']} en {a['environment']} "
-                f"({a['type']}). Estado {a['status']}, {state}, {open_n} {open_label}."
+                f"({a['type']}). Estado {a['status']}, {state}."
+                + (f" {open_n} {open_label}." if "open_incidents" in a else "")
                 + (f" Responsable: {a['owner']}." if a.get("owner") else "")
             ),
             suggestions=[

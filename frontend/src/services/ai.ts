@@ -1,4 +1,5 @@
 import { AI_ENDPOINT, AI_CONVERSATIONS_PAGE_SIZE } from "@/lib/config";
+import { AIStreamParser, type AIStreamEvent } from "./aiStream";
 import {
   isAICapabilities,
   isAIChatResponse,
@@ -14,6 +15,12 @@ import {
 const REQUEST_TIMEOUT_MS = 45_000; // an AI turn may run several tool queries
 
 export type AIErrorKind =
+  | "provider_not_configured"
+  | "provider_authentication_error"
+  | "provider_rate_limited"
+  | "tool_execution_failed"
+  | "tool_round_limit_exceeded"
+  | "turn_in_progress"
   | "unreachable"
   | "unauthorized"
   | "forbidden"
@@ -87,6 +94,13 @@ function detailMessage(body: unknown): string | undefined {
 }
 
 function errorFor(status: number, body: unknown): AIError {
+  const code = detailCode(body);
+  const providerCodes: AIErrorKind[] = ["provider_not_configured", "provider_authentication_error",
+    "provider_rate_limited", "provider_timeout", "provider_unavailable", "tool_execution_failed",
+    "tool_round_limit_exceeded", "turn_in_progress"];
+  if (code && providerCodes.includes(code as AIErrorKind)) {
+    return { kind: code as AIErrorKind, message: detailMessage(body) };
+  }
   if (status === 401) return { kind: "unauthorized" };
   if (status === 403) return { kind: "forbidden" };
   if (status === 404) return { kind: "not_found" };
@@ -172,4 +186,50 @@ export async function sendMessage(
   if (res === null) return { ok: false, error: { kind: "unreachable" } };
   if (res.status === 200 && isAIChatResponse(res.body)) return { ok: true, data: res.body };
   return { ok: false, error: errorFor(res.status, res.body) };
+}
+
+export async function streamMessage(
+  conversationId: string, content: string, requestId: string,
+  onEvent: (event: AIStreamEvent) => void,
+): Promise<AIResult<AIChatResponse>> {
+  const controller = new AbortController();
+  // Above the backend's hard 120-second maximum plus transport/cleanup allowance.
+  const timer = setTimeout(() => controller.abort(), 150_000);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    const res = await fetch(`${AI_ENDPOINT}/conversations/${encodeURIComponent(conversationId)}/messages/stream`, {
+      method: "POST", credentials: "include", cache: "no-store", signal: controller.signal,
+      headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+      body: JSON.stringify({ content, request_id: requestId }),
+    });
+    if (!res.ok) return { ok: false, error: errorFor(res.status, await res.json().catch(() => null)) };
+    if (!res.body) return { ok: false, error: { kind: "unreachable" } };
+    reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    const parser = new AIStreamParser();
+    let length = 0;
+    while (true) {
+      const { value, done } = await reader.read();
+      const events = parser.push(decoder.decode(value, { stream: !done }));
+      for (const event of events) {
+        if (event.type === "text.delta") {
+          length += event.delta.length;
+          if (length > 20000) throw new Error("Oversized answer");
+        }
+        onEvent(event);
+        if (event.type === "turn.completed") return { ok: true, data: event.response };
+        if (event.type === "turn.failed") return {
+          ok: false, error: errorFor(503, { detail: { code: event.code, message: event.message } }),
+        };
+      }
+      if (done) return { ok: false, error: { kind: "unreachable" } };
+    }
+  } catch {
+    return { ok: false, error: { kind: controller.signal.aborted ? "provider_timeout" : "unreachable" } };
+  } finally {
+    clearTimeout(timer);
+    await reader?.cancel().catch(() => undefined);
+    reader?.releaseLock();
+    controller.abort();
+  }
 }

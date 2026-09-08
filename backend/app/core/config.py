@@ -132,16 +132,18 @@ class Settings(BaseSettings):
     # InfraGuard stays fully usable.
     AI_PROVIDER: Literal["deterministic", "openai"] = "deterministic"
     AI_MODEL: str = "infraguard-deterministic-v1"
-    AI_API_KEY: str | None = None
+    AI_API_KEY: str | None = Field(default=None, repr=False)
     AI_OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     #: Hard ceiling on a single provider call (seconds).
     AI_REQUEST_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0, le=120)
     #: Max length of a single user message (enforced backend + frontend).
     AI_MESSAGE_MAX_LENGTH: int = Field(default=4000, gt=0, le=20000)
     #: Rows any single AI tool may return (grounding stays bounded / minimal).
-    AI_MAX_TOOL_RESULTS: int = Field(default=25, gt=0, le=100)
+    AI_MAX_TOOL_RESULTS: int = Field(default=25, gt=0, le=50)
+    AI_MAX_TOOL_ROUNDS: int = Field(default=6, ge=1, le=8)
+    AI_MAX_OUTPUT_TOKENS: int = Field(default=2000, ge=128, le=4000)
     #: Recent messages replayed to the provider for continuity.
-    AI_HISTORY_WINDOW: int = Field(default=10, gt=0, le=50)
+    AI_HISTORY_WINDOW: int = Field(default=20, gt=0, le=50)
     #: Per-user message rate limit (stricter than ordinary reads).
     AI_RATE_LIMIT_MAX_MESSAGES: int = Field(default=20, gt=0)
     AI_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60, gt=0)

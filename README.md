@@ -1,5 +1,7 @@
 # InfraGuard AI
 
+> **AI Assistant v2:** See the [current provider, streaming, security and setup guide](docs/ai-assistant-v2.md). Historical v1 sections below describe the foundation; the v2 guide supersedes their provider, streaming and retry details.
+
 **AI-powered infrastructure intelligence and incident management platform.**
 
 InfraGuard AI aims to help operations teams understand their infrastructure,
@@ -442,7 +444,7 @@ explicitly-confirmed action layer.
   intent whose capability list is scoped to the caller's permissions). Anything
   outside that scope returns *"Esta consulta requiere un proveedor de IA
   avanzado…"* - it never fabricates entities or facts. An optional `openai`
-  adapter (stdlib HTTP, no new runtime dependency) sits behind the same
+  adapter (official OpenAI SDK, Responses API) sits behind the same
   abstraction. If a configured real provider is unavailable InfraGuard stays
   fully usable and the Assistant degrades gracefully (typed `503`; the user's
   message stays on screen and is retryable - the retry regenerates the turn
@@ -1089,7 +1091,7 @@ milestone.
 - Incident-level **"Topología afectada" / impact** view (built on Asset
   Relationships & Topology + the v0.5 Incident ↔ Asset relationship)
 - AI Assistant next steps: an explicitly-confirmed **action layer** (guarded,
-  audited AI-initiated changes), streaming responses, retrieval over
+  audited AI-initiated changes), retrieval over
   documentation
 - Operational dashboards
 - Kubernetes manifests + Helm chart (`infra/`), with Secrets / external secret manager
