@@ -91,6 +91,7 @@ class PathResult:
     found: bool
     nodes: list[Asset] = field(default_factory=list)
     edges: list[AssetRelationship] = field(default_factory=list)
+    truncated: bool = False
 
 
 def _passes_filters(
@@ -110,6 +111,7 @@ def _neighbor_edges(
     frontier_ids: set[uuid.UUID],
     direction: TopoDirection,
     relationship_types: tuple[str, ...],
+    edge_limit: int | None = None,
 ) -> list[tuple[AssetRelationship, Asset, Asset]]:
     """Every live edge touching ``frontier_ids`` on the side ``direction`` allows."""
     conds = [both_endpoints_live()]
@@ -126,7 +128,10 @@ def _neighbor_edges(
                 AssetRelationship.target_asset_id.in_(frontier_ids),
             )
         )
-    rows = db.execute(base_relationship_select().where(*conds)).all()
+    query = base_relationship_select().where(*conds)
+    if edge_limit is not None:
+        query = query.order_by(AssetRelationship.id).limit(edge_limit)
+    rows = db.execute(query).all()
     return [(r[0], r[1], r[2]) for r in rows]
 
 
@@ -303,11 +308,15 @@ def find_path(
     for _hop in range(max_depth):
         if not frontier or found:
             break
-        rows = _neighbor_edges(db, frontier, "both", ())
+        rows = _neighbor_edges(db, frontier, "both", (), edge_limit=2001)
+        if len(rows) > 2000:
+            return PathResult(found=False, truncated=True)
         next_frontier: set[uuid.UUID] = set()
         for rel, source, target in rows:
             for a, b in ((source, target), (target, source)):
                 if a.id in frontier and b.id not in visited:
+                    if len(visited) >= MAX_NODE_CAP:
+                        return PathResult(found=False, truncated=True)
                     visited.add(b.id)
                     parent[b.id] = (a.id, rel)
                     next_frontier.add(b.id)

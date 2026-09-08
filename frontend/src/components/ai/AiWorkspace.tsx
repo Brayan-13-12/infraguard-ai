@@ -75,6 +75,11 @@ export function AiWorkspace() {
   const [active, setActive] = useState<ActiveState>({ kind: "empty" });
   const [pending, setPending] = useState<AIMessage | null>(null);
   const [sending, setSending] = useState(false);
+  const [streamText, setStreamText] = useState("");
+  const [activity, setActivity] = useState<string | null>(null);
+  const [completedAnnouncement, setCompletedAnnouncement] = useState(false);
+  const busyRef = useRef(false);
+  const retryIdRef = useRef<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [lastSent, setLastSent] = useState<string | null>(null);
   const [railOpen, setRailOpen] = useState(false);
@@ -117,6 +122,7 @@ export function AiWorkspace() {
     if (loadedIdRef.current === activeId) return;
 
     let cancelled = false;
+    loadedIdRef.current = null;
     setActive({ kind: "loading" });
     setPending(null);
     setSendError(null);
@@ -135,9 +141,9 @@ export function AiWorkspace() {
   useEffect(() => {
     const el = scrollRef.current;
     if (el && typeof el.scrollTo === "function") {
-      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
     }
-  }, [messages.length, pending, sending]);
+  }, [messages.length, pending, sending, streamText]);
 
   // --- navigation helpers -------------------------------------------
 
@@ -155,6 +161,12 @@ export function AiWorkspace() {
   );
 
   const startNew = useCallback(() => {
+    if (busyRef.current) return;
+    retryIdRef.current = null;
+    loadedIdRef.current = null;
+    setPending(null);
+    setSendError(null);
+    setLastSent(null);
     setUrl({ c: null, asset_id: null, incident_id: null });
     setActive({ kind: "empty" });
     setRailOpen(false);
@@ -162,6 +174,8 @@ export function AiWorkspace() {
 
   const selectConversation = useCallback(
     (id: string) => {
+      if (busyRef.current) return;
+      retryIdRef.current = null;
       setUrl({ c: id, asset_id: null, incident_id: null });
       setRailOpen(false);
     },
@@ -171,8 +185,14 @@ export function AiWorkspace() {
   // --- send ---------------------------------------------------------
 
   const send = useCallback(
-    async (text: string) => {
-      if (sending) return;
+    async (text: string, retry = false) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      const requestId = retry && retryIdRef.current ? retryIdRef.current : crypto.randomUUID();
+      retryIdRef.current = requestId;
+      setCompletedAnnouncement(false);
+      setStreamText("");
+      setActivity(null);
       setSending(true);
       setSendError(null);
       setLastSent(text);
@@ -198,6 +218,7 @@ export function AiWorkspace() {
             : undefined;
         const created = await aiService.createConversation(ctx ? { context: ctx } : {});
         if (!created.ok) {
+          busyRef.current = false;
           setSending(false);
           setPending(null);
           setSendError(t(ERROR_KEY[created.error.kind] ?? "ai.errors.send"));
@@ -211,8 +232,20 @@ export function AiWorkspace() {
         setUrl({ c: conversationId, asset_id: null, incident_id: null });
       }
 
-      const res = await aiService.sendMessage(conversationId, text);
+      const res = caps?.streaming
+        ? await aiService.streamMessage(conversationId, text, requestId, (event) => {
+            if (loadedIdRef.current !== conversationId) return;
+            if (event.type === "text.delta") setStreamText((prev) => prev + event.delta);
+            if (event.type === "turn.started") setPending(event.user_message);
+            if (event.type === "tool.started") setActivity(event.source);
+            if (event.type === "tool.completed") setActivity(null);
+          })
+        : await aiService.sendMessage(conversationId, text);
+      busyRef.current = false;
       setSending(false);
+      setStreamText("");
+      setActivity(null);
+      if (loadedIdRef.current !== conversationId) return;
 
       if (!res.ok) {
         // Keep the optimistic user bubble on screen - the turn is not lost, it
@@ -223,6 +256,7 @@ export function AiWorkspace() {
       }
 
       setPending(null);
+      retryIdRef.current = null;
       loadedIdRef.current = conversationId;
       setActive((prev) => {
         if (prev.kind !== "ready" || prev.detail.id !== conversationId) return prev;
@@ -230,7 +264,8 @@ export function AiWorkspace() {
         // previous failed turn we later reopened) is replaced by this turn.
         const msgs = prev.detail.messages;
         const last = msgs[msgs.length - 1];
-        const base = last && last.role === "user" ? msgs.slice(0, -1) : msgs;
+        const base = (last && last.role === "user" ? msgs.slice(0, -1) : msgs)
+          .filter((m) => m.id !== res.data.user_message.id && m.id !== res.data.assistant_message.id);
         return {
           kind: "ready",
           detail: {
@@ -242,12 +277,14 @@ export function AiWorkspace() {
         };
       });
       setLastSent(null);
+      setCompletedAnnouncement(true);
       void loadConversations();
     },
-    [activeId, assetCtx, incidentCtx, sending, setUrl, loadConversations, t],
+    [activeId, assetCtx, incidentCtx, caps?.streaming, setUrl, loadConversations, t],
   );
 
   const confirmDelete = useCallback(async () => {
+    if (busyRef.current) return;
     if (!toDelete) return;
     setDeleting(true);
     const res = await aiService.deleteConversation(toDelete.id);
@@ -278,15 +315,15 @@ export function AiWorkspace() {
     return promptContext.type === "asset"
       ? [
           t("ai.contextSuggestions.assetSummary"),
-          t("ai.contextSuggestions.assetIncidents"),
-          t("ai.contextSuggestions.assetChanges"),
+          ...(can("incidents.read") ? [t("ai.contextSuggestions.assetIncidents")] : []),
+          ...(can("audit.read") ? [t("ai.contextSuggestions.assetChanges")] : []),
         ]
       : [
           t("ai.contextSuggestions.incidentSummary"),
-          t("ai.contextSuggestions.incidentAssets"),
+          ...(can("assets.read") ? [t("ai.contextSuggestions.incidentAssets")] : []),
           t("ai.contextSuggestions.incidentTimeline"),
         ];
-  }, [promptContext, t]);
+  }, [promptContext, t, can]);
 
   // --- render -----------------------------------------------------
 
@@ -338,7 +375,7 @@ export function AiWorkspace() {
     }
     return (
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-6 sm:px-6">
-        {messages.map((m) => (
+        {(pending && messages.at(-1)?.role === "user" ? messages.slice(0, -1) : messages).map((m) => (
           <MessageBubble key={m.id} message={m} onSuggestion={send} />
         ))}
         {pending ? (
@@ -347,14 +384,12 @@ export function AiWorkspace() {
           </div>
         ) : null}
         {sending ? (
-          <div className="flex items-center gap-2 pl-10 text-xs text-muted-foreground">
-            <span className="flex gap-1">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary [animation-delay:150ms]" />
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary [animation-delay:300ms]" />
-            </span>
-            {t("ai.thinking")}
-          </div>
+          <>
+            <MessageBubble message={{ id: "streaming", role: "assistant", content: streamText || t("ai.thinking"), created_at: "", evidence: [], entities: [], suggestions: [] }} />
+            <div role="status" className="pl-10 text-xs text-muted-foreground">
+              {activity ? t(({ assets: "ai.activity.assets", incidents: "ai.activity.incidents", audit: "ai.activity.audit", relationships: "ai.activity.relationships" } as Record<string, TranslationKey>)[activity] ?? "ai.thinking") : t("ai.thinking")}
+            </div>
+          </>
         ) : null}
       </div>
     );
@@ -362,6 +397,7 @@ export function AiWorkspace() {
 
   return (
     <div className="flex flex-col gap-4">
+      <span className="sr-only" aria-live="polite">{completedAnnouncement ? t("ai.responseComplete") : ""}</span>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-center gap-2">
           {!isDesktop ? (
@@ -420,7 +456,7 @@ export function AiWorkspace() {
                     variant="ghost"
                     size="sm"
                     className="text-danger hover:bg-danger/10"
-                    onClick={() => send(lastSent)}
+                    onClick={() => send(lastSent, true)}
                   >
                     {t("ai.errors.retry")}
                   </Button>

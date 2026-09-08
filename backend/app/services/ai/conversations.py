@@ -127,6 +127,32 @@ def recent_messages(db: Session, conversation_id: uuid.UUID, limit: int) -> list
     return list(reversed(rows))
 
 
+def get_request_message(
+    db: Session, conversation_id: uuid.UUID, request_id: str
+) -> AIMessage | None:
+    return db.execute(
+        select(AIMessage)
+        .where(
+            AIMessage.conversation_id == conversation_id,
+            AIMessage.role == "user",
+            AIMessage.message_metadata["request_id"].astext == request_id,
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def get_reply(db: Session, conversation_id: uuid.UUID, user_message_id: str) -> AIMessage | None:
+    return db.execute(
+        select(AIMessage)
+        .where(
+            AIMessage.conversation_id == conversation_id,
+            AIMessage.role == "assistant",
+            AIMessage.message_metadata["reply_to"].astext == user_message_id,
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+
+
 def add_message(
     db: Session,
     *,

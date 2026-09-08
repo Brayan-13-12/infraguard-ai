@@ -18,7 +18,7 @@ from app.services.ai.tools import (
 )
 
 #: A read tool's verb (first name segment) is one of these - never a mutation.
-_READ_VERBS = {"search", "get", "summarize", "list", "count"}
+_READ_VERBS = {"search", "get", "summarize", "list", "count", "find"}
 _MUTATION_VERBS = {
     "create",
     "update",
@@ -128,3 +128,5 @@ def test_executor_rejects_unknown_tool_and_bad_input() -> None:
         ex.call("run_sql", {})
     with pytest.raises(ToolInputError):
         ex.call("search_assets", {"limit": 100000})
+    with pytest.raises(ToolInputError):
+        ex.call("search_assets", [])  # type: ignore[arg-type]

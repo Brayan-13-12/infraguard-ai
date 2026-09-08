@@ -1,5 +1,7 @@
 # InfraGuard AI - Architecture
 
+> **AI Assistant v2:** See the [current provider, streaming, security and setup guide](ai-assistant-v2.md). Historical v1 sections below describe the foundation; the v2 guide supersedes their provider, streaming and retry details.
+
 > Updated as phases land. **Not production-ready.**
 >
 > * **v0.1 - Project Bootstrap:** monorepo, health probes, segmented + hardened
@@ -1763,7 +1765,7 @@ identical consecutive messages both remain visible).
   outside every intent → *"Esta consulta requiere un proveedor de IA
   avanzado…"*. It never fabricates an entity or a fact. This is what **tests,
   Docker and CI** use.
-* **`OpenAIProvider`** (optional) — stdlib `urllib` (no new runtime dependency),
+* **`OpenAIProvider`** (optional) — official SDK Responses API,
   tool schemas generated from each input model, a bounded tool-call loop, the
   `SYSTEM_BOUNDARY` system prompt, transport errors mapped to
   `ProviderTimeout` / `ProviderUnavailable`. `ready = bool(api_key)`; when not
@@ -1809,7 +1811,7 @@ kinds; no API key ever reaches the browser.
 AI mutations / an action layer, autonomous or background agents, scheduled AI
 jobs, auto-resolution, RAG / vector DB / embeddings / pgvector, web browsing,
 voice, file uploads, image generation, multi-agent orchestration,
-LangChain / LlamaIndex, streaming responses.
+LangChain / LlamaIndex. Streaming is implemented in v2.
 
 ## 19. Asset Relationships & Topology
 
@@ -2106,7 +2108,7 @@ Later, dedicated feature branches are expected to add:
   audit **retention** policy, resource-/row-level authorization
 - **AI Assistant** — v1 (read-only grounded intelligence, §18d) has shipped;
   next: an explicitly-confirmed **action layer** (guarded, audited AI-initiated
-  changes), streaming responses, retrieval over documentation
+  changes), retrieval over documentation
 - refresh tokens + revocation; password reset; email verification; OAuth; MFA;
   SSO/OIDC; teams / groups; temporary permissions
 - **Asset Relationships & Topology** (§19) has shipped, including a real,

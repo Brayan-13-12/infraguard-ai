@@ -1,26 +1,16 @@
-"""One turn of an AI conversation, end to end.
-
-Flow (see docs/architecture.md):
-
-    resolve + RBAC-check context
-      -> persist the user message, derive a title if it's the first one, COMMIT
-         (the slow provider call then runs with **no open write transaction**)
-      -> run the provider (deterministic | openai); tools do fresh bounded reads,
-         each authorized against the caller's permissions
-      -> persist the assistant message with bounded, sanitized evidence metadata
-      -> COMMIT and return both messages
-
-On provider / tool failure nothing fake is written: a typed :class:`AIError` is
-raised, the user message stays (the conversation is usable for retry), and the
-route returns a recoverable error. When the *next* turn starts, that dangling
-user message (a user turn with no assistant reply) is swept, so a retry
-regenerates the turn instead of stacking a second identical user message.
-"""
+"""One bounded read-only turn; JSON and SSE share persistence and retry semantics."""
 
 from __future__ import annotations
 
+import logging
+import time
+import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from threading import Lock
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -33,24 +23,38 @@ from app.services.ai.providers import (
     HistoryTurn,
     ProviderError,
     ProviderRequest,
-    ProviderTimeout,
     ProviderUnavailable,
-    ProviderUnsupported,
     get_provider,
 )
 from app.services.ai.tools import ToolError, ToolExecutor
 
-_METADATA_MAX_CHARS = 6000
+logger = logging.getLogger(__name__)
+_lock = Lock()
+_active_users: set[uuid.UUID] = set()
+_READ_PERMISSIONS = frozenset({"assets.read", "incidents.read", "audit.read", "relationships.read"})
 
 
 class AIError(Exception):
-    """Recoverable turn failure. ``code`` is one of ``provider_unavailable`` /
-    ``provider_timeout`` / ``tool_failure`` / ``provider_unsupported``."""
-
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+@contextmanager
+def turn_slot(user_id: uuid.UUID):
+    """One active turn per user/process; also protects conversation deletion."""
+    with _lock:
+        if user_id in _active_users:
+            raise AIError(
+                "turn_in_progress", "Ya hay una respuesta en curso. Inténtalo al terminar."
+            )
+        _active_users.add(user_id)
+    try:
+        yield
+    finally:
+        with _lock:
+            _active_users.discard(user_id)
 
 
 @dataclass(slots=True)
@@ -60,19 +64,44 @@ class Turn:
     assistant_message: AIMessage
 
 
+def history_allowed(message: AIMessage, permissions: frozenset[str]) -> bool:
+    if message.role == "user":
+        return True
+    # Legacy answers did not record permissions; fail closed after a role reduction.
+    required = (message.message_metadata or {}).get("read_permissions", list(_READ_PERMISSIONS))
+    return set(required) <= permissions
+
+
+def _suggestions(executor: ToolExecutor) -> list[str]:
+    pairs = (
+        ("get_asset_impact", "¿Qué activos podrían verse afectados por una falla?"),
+        ("search_incidents", "¿Qué incidentes abiertos están relacionados?"),
+        ("search_audit", "¿Qué cambios recientes hubo en esos activos?"),
+        ("search_assets", "Compara los activos encontrados."),
+    )
+    return [text for name, text in pairs if executor.can(name)][:4]
+
+
 def _sanitize_metadata(executor: ToolExecutor, suggestions: list[str], provider: str) -> dict:
-    meta = {
+    # No model-created IDs or unverified model-generated follow-ups cross this boundary.
+    return {
         "provider": provider,
-        "evidence": [e.model_dump() for e in executor.collected_evidence()],
+        "evidence": [e.model_dump() for e in executor.collected_evidence()][:16],
         "entities": [e.model_dump() for e in executor.collected_entities()],
-        "suggestions": [s[:160] for s in suggestions[:4]],
+        "suggestions": _suggestions(executor),
+        "tool_summary": list(dict.fromkeys(c.result.evidence.source for c in executor.calls)),
+        "tool_count": len(executor.calls),
     }
-    if len(str(meta)) > _METADATA_MAX_CHARS:  # pragma: no cover - defensive
-        meta = {"provider": provider, "evidence": [], "entities": [], "suggestions": []}
-    return meta
 
 
-def run_turn(
+def run_turn(db: Session, **kwargs) -> Turn:
+    for kind, data in stream_turn(db, **kwargs):
+        if kind == "turn.completed":
+            return data
+    raise AIError("provider_unavailable", "No se completó la respuesta.")
+
+
+def stream_turn(
     db: Session,
     *,
     user: User,
@@ -80,68 +109,129 @@ def run_turn(
     conversation: AIConversation,
     content: str,
     provider: AIProvider | None = None,
-) -> Turn:
+    request_id: uuid.UUID | None = None,
+) -> Iterator[tuple[str, object]]:
+    with turn_slot(user.id):
+        yield from _stream_turn(
+            db,
+            user=user,
+            permissions=permissions,
+            conversation=conversation,
+            content=content,
+            provider=provider,
+            request_id=request_id,
+        )
+
+
+def _stream_turn(
+    db: Session,
+    *,
+    user: User,
+    permissions: frozenset[str],
+    conversation: AIConversation,
+    content: str,
+    provider: AIProvider | None,
+    request_id: uuid.UUID | None,
+) -> Iterator[tuple[str, object]]:
     provider = provider or get_provider()
-
+    started = time.monotonic()
+    logger.info("ai.turn.started provider=%s", provider.name)
     ctx = resolve_conversation_context(db, conversation, permissions)
-
-    existing = conv_service.get_messages(db, conversation.id)
-    # A prior turn whose provider call failed leaves a dangling user message
-    # (no assistant reply). Sweep it so this call regenerates that turn rather
-    # than appending a second identical user message. Only ever a trailing
-    # unanswered "user" message - which the normal flow never otherwise leaves.
-    if existing and existing[-1].role == AIMessageRole.USER.value:
-        conv_service.remove_message(db, existing[-1])
+    existing = conv_service.recent_messages(db, conversation.id, settings.AI_HISTORY_WINDOW + 2)
+    user_message = None
+    if request_id:
+        prior = conv_service.get_request_message(db, conversation.id, str(request_id))
+        if prior:
+            if prior.content != content:
+                raise AIError("request_conflict", "Este intento corresponde a otro mensaje.")
+            reply = conv_service.get_reply(db, conversation.id, str(prior.id))
+            if reply:
+                if not history_allowed(reply, permissions):
+                    raise AIError(
+                        "forbidden", "La respuesta ya no está disponible para tu usuario."
+                    )
+                yield "turn.completed", Turn(conversation, prior, reply)
+                return
+            if existing and existing[-1].id == prior.id:
+                user_message = prior
+            else:
+                raise AIError(
+                    "request_conflict", "Este intento ya no es el último de la conversación."
+                )
+    if existing and existing[-1].role == "user":
+        if user_message is None:
+            conv_service.remove_message(db, existing[-1])
         existing = existing[:-1]
-    had_messages = bool(existing)
-
-    user_message = conv_service.add_message(
-        db, conversation=conversation, role=AIMessageRole.USER, content=content
-    )
-    if not had_messages and conversation.title == "Nueva conversación":
+    if user_message is None:
+        user_message = conv_service.add_message(
+            db,
+            conversation=conversation,
+            role=AIMessageRole.USER,
+            content=content,
+            metadata={"request_id": str(request_id)} if request_id else None,
+        )
+    if not existing and conversation.title == "Nueva conversación":
         conversation.title = conv_service.derive_title(content)
         db.add(conversation)
-    db.flush()
-    # Release the write transaction before the (possibly slow) provider call.
     db.commit()
-
+    yield "turn.started", user_message
     history = [
-        HistoryTurn(role=m.role, content=m.content)
-        for m in conv_service.recent_messages(db, conversation.id, settings.AI_HISTORY_WINDOW)
-        if m.id != user_message.id
+        HistoryTurn(role=m.role, content=m.content[:4000])
+        for m in existing[-settings.AI_HISTORY_WINDOW :]
+        if history_allowed(m, permissions)
     ]
-
     executor = ToolExecutor(db, permissions)
-    request = ProviderRequest(user_message=content, history=history, context=ctx, executor=executor)
-
+    request = ProviderRequest(content, history, ctx, executor)
     try:
-        result = provider.generate(request)
-    except ProviderTimeout as exc:
+        result = None
+        for event in provider.stream(request):
+            if event.result is not None:
+                result = event.result
+            else:
+                yield event.type, event.data
+        if result is None or not result.text.strip() or len(result.text) > 20000:
+            raise ProviderUnavailable("missing or oversized final answer")
+        metadata = _sanitize_metadata(executor, result.suggestions, provider.name)
+        metadata.update(
+            {
+                "model": provider.model[:100],
+                "duration_ms": int((time.monotonic() - started) * 1000),
+                "read_permissions": sorted(permissions & _READ_PERMISSIONS),
+                "reply_to": str(user_message.id),
+            }
+        )
+        assistant = conv_service.add_message(
+            db,
+            conversation=conversation,
+            role=AIMessageRole.ASSISTANT,
+            content=result.text.strip(),
+            metadata=metadata,
+        )
+        db.commit()
+        db.refresh(conversation)
+        logger.info(
+            "ai.turn.completed provider=%s tool_count=%d duration_ms=%d",
+            provider.name,
+            len(executor.calls),
+            metadata["duration_ms"],
+        )
+        yield "turn.completed", Turn(conversation, user_message, assistant)
+    except ProviderError as exc:
         db.rollback()
+        logger.warning("ai.turn.failed code=%s", exc.code)
         raise AIError(
-            "provider_timeout", "El proveedor de IA tardó demasiado en responder."
+            exc.code,
+            {
+                "provider_not_configured": "El proveedor de IA no está configurado.",
+                "provider_authentication_error": "No se pudo autenticar el proveedor de IA.",
+                "provider_rate_limited": "El proveedor alcanzó su límite. Inténtalo más tarde.",
+                "provider_timeout": "El proveedor de IA tardó demasiado en responder.",
+                "tool_round_limit_exceeded": "La consulta alcanzó su límite. Acota la pregunta.",
+            }.get(exc.code, "El proveedor de IA no está disponible. Inténtalo de nuevo."),
         ) from exc
-    except ProviderUnsupported as exc:
+    except (ToolError, SQLAlchemyError) as exc:
         db.rollback()
-        raise AIError("provider_unsupported", str(exc) or "Consulta no soportada.") from exc
-    except (ProviderUnavailable, ProviderError) as exc:
+        raise AIError("tool_execution_failed", "No se pudo consultar la información.") from exc
+    finally:
+        # Generator close/disconnect never persists a partial assistant answer.
         db.rollback()
-        raise AIError(
-            "provider_unavailable",
-            "El proveedor de IA no está disponible en este momento. Inténtalo de nuevo.",
-        ) from exc
-    except ToolError as exc:  # providers catch these; belt and braces
-        db.rollback()
-        raise AIError("tool_failure", "No se pudo obtener la información solicitada.") from exc
-
-    metadata = _sanitize_metadata(executor, result.suggestions, provider.name)
-    assistant_message = conv_service.add_message(
-        db,
-        conversation=conversation,
-        role=AIMessageRole.ASSISTANT,
-        content=result.text.strip() or "…",
-        metadata=metadata,
-    )
-    db.commit()
-    db.refresh(conversation)
-    return Turn(conversation, user_message, assistant_message)

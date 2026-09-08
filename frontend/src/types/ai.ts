@@ -13,7 +13,9 @@ export type AIEvidenceSource =
   | "incidents"
   | "audit"
   | "incident_timeline"
-  | "dashboard";
+  | "dashboard"
+  | "relationships"
+  | "topology";
 
 export interface AIEntityRef {
   type: AIEntityType;
@@ -35,6 +37,7 @@ export interface AIMessage {
   evidence: AIEvidenceItem[];
   entities: AIEntityRef[];
   suggestions: string[];
+  tool_summary?: string[];
 }
 
 export interface AIConversationContext {
@@ -88,6 +91,9 @@ export interface AICapabilities {
   provider: string;
   model: string;
   ready: boolean;
+  configured?: boolean;
+  streaming?: boolean;
+  tool_calling?: boolean;
   read_only: boolean;
   message_max_length: number;
   tools: AIToolInfo[];

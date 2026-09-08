@@ -1013,6 +1013,14 @@ const es = {
     },
   },
   ai: {
+    sourcesConsulted: "Consulté {count} fuentes de InfraGuard",
+    responseComplete: "Respuesta completada. Las fuentes están disponibles junto al mensaje.",
+    activity: {
+      assets: "Consultando activos…",
+      incidents: "Revisando incidentes…",
+      audit: "Consultando cambios recientes…",
+      relationships: "Analizando dependencias…",
+    },
     title: "AI Assistant",
     subtitle: "Inteligencia basada en tus datos de InfraGuard",
     readOnlyBadge: "Solo lectura",
@@ -1061,6 +1069,8 @@ const es = {
     roleUser: "Tú",
     roleAssistant: "InfraGuard AI",
     evidence: {
+      relationships: "Relaciones",
+      topology: "Topología",
       heading: "Fuentes",
       assets: "Activos",
       incidents: "Incidentes",

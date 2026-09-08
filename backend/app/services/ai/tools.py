@@ -15,6 +15,8 @@ There is no generic "call any service" or "run SQL" capability.
 
 from __future__ import annotations
 
+import json
+import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -26,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.asset import Asset, AssetStatus, Criticality, Environment
+from app.models.audit import AuditAction, AuditEntityType
 from app.models.incident import (
     Incident,
     IncidentAsset,
@@ -48,7 +51,7 @@ from app.services.incidents import (
     list_incidents,
 )
 from app.services.relationships import grouped_for_asset
-from app.services.topology import compute_impact, get_subgraph
+from app.services.topology import compute_impact, find_path, get_subgraph
 
 _LIMIT = settings.AI_MAX_TOOL_RESULTS
 _QUERY_MAX = 120
@@ -208,8 +211,8 @@ class SearchAuditInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str | None = Field(default=None, max_length=_QUERY_MAX)
-    action: list[str] = Field(default_factory=list, max_length=6)
-    entity_type: list[str] = Field(default_factory=list, max_length=6)
+    action: list[AuditAction] = Field(default_factory=list, max_length=6)
+    entity_type: list[AuditEntityType] = Field(default_factory=list, max_length=6)
     entity_id: str | None = Field(default=None, max_length=64)
     limit: int = Field(default=_LIMIT, ge=1, le=_LIMIT)
 
@@ -240,12 +243,55 @@ class GetAssetImpactInput(BaseModel):
     max_depth: int = Field(default=2, ge=1, le=3)
 
 
+class FindDependencyPathInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_asset_id: uuid.UUID
+    target_asset_id: uuid.UUID
+    max_depth: int = Field(default=3, ge=1, le=3)
+
+
+def _t_find_dependency_path(db: Session, p: FindDependencyPathInput) -> ToolResult:
+    result = find_path(
+        db,
+        source_asset_id=p.source_asset_id,
+        target_asset_id=p.target_asset_id,
+        max_depth=p.max_depth,
+    )
+    nodes = result.nodes if result else []
+    return ToolResult(
+        data={
+            "found": bool(result and result.found),
+            "max_depth": p.max_depth,
+            "truncated": bool(result and result.truncated),
+            "semantics": "connection path in either direction; inspect recorded edge direction",
+            "nodes": [_asset_dict(a) for a in nodes],
+            "edges": [
+                {
+                    "source_asset_id": str(e.source_asset_id),
+                    "target_asset_id": str(e.target_asset_id),
+                    "relationship_type": e.relationship_type,
+                }
+                for e in result.edges
+            ]
+            if result
+            else [],
+        },
+        evidence=AIEvidenceItem(source="topology", label="Ruta registrada", count=len(nodes)),
+        entities=[_asset_entity(a) for a in nodes],
+    )
+
+
 # --------------------------------------------------------------------------
 # Tool implementations
 # --------------------------------------------------------------------------
 
 
-def _t_search_assets(db: Session, p: SearchAssetsInput) -> ToolResult:
+def _t_search_assets(
+    db: Session,
+    p: SearchAssetsInput,
+    *,
+    include_incidents: bool = False,
+) -> ToolResult:
     rows, total = list_assets(
         db,
         AssetQuery(
@@ -258,8 +304,11 @@ def _t_search_assets(db: Session, p: SearchAssetsInput) -> ToolResult:
             page_size=p.limit,
         ),
     )
-    counts = _open_incident_counts(db, [a.id for a in rows])
-    items = [_asset_dict(a, open_incidents=counts.get(a.id, 0)) for a in rows]
+    counts = _open_incident_counts(db, [a.id for a in rows]) if include_incidents else {}
+    items = [
+        _asset_dict(a, open_incidents=counts.get(a.id, 0) if include_incidents else None)
+        for a in rows
+    ]
     return ToolResult(
         data={"total": total, "returned": len(items), "assets": items},
         evidence=AIEvidenceItem(source="assets", label="Activos", count=total),
@@ -267,16 +316,26 @@ def _t_search_assets(db: Session, p: SearchAssetsInput) -> ToolResult:
     )
 
 
-def _t_get_asset(db: Session, p: GetAssetInput) -> ToolResult:
+def _t_get_asset(
+    db: Session,
+    p: GetAssetInput,
+    *,
+    include_incidents: bool = False,
+) -> ToolResult:
     asset = get_asset(db, p.asset_id)
     if asset is None or asset.deleted_at is not None:
         return ToolResult(
             data={"found": False, "asset_id": str(p.asset_id)},
             evidence=AIEvidenceItem(source="assets", label="Activo", count=0),
         )
-    counts = _open_incident_counts(db, [asset.id])
+    counts = _open_incident_counts(db, [asset.id]) if include_incidents else {}
     return ToolResult(
-        data={"found": True, "asset": _asset_dict(asset, open_incidents=counts.get(asset.id, 0))},
+        data={
+            "found": True,
+            "asset": _asset_dict(
+                asset, open_incidents=counts.get(asset.id, 0) if include_incidents else None
+            ),
+        },
         evidence=AIEvidenceItem(source="assets", label="Activo", count=1),
         entities=[_asset_entity(asset)],
     )
@@ -314,7 +373,12 @@ def _t_search_incidents(db: Session, p: SearchIncidentsInput) -> ToolResult:
     )
 
 
-def _t_get_incident(db: Session, p: GetIncidentInput) -> ToolResult:
+def _t_get_incident(
+    db: Session,
+    p: GetIncidentInput,
+    *,
+    include_assets: bool = False,
+) -> ToolResult:
     detail = get_incident_detail(db, p.incident_id)
     if detail is None or detail.incident.deleted_at is not None:
         return ToolResult(
@@ -324,11 +388,13 @@ def _t_get_incident(db: Session, p: GetIncidentInput) -> ToolResult:
     inc = detail.incident
     data = _incident_dict(inc, affected=len(detail.assets))
     data["description"] = (inc.description or "")[:1200]
-    data["affected_assets"] = [_asset_dict(a) for a in detail.assets[:_LIMIT]]
+    if include_assets:
+        data["affected_assets"] = [_asset_dict(a) for a in detail.assets[:_LIMIT]]
     return ToolResult(
         data={"found": True, "incident": data},
         evidence=AIEvidenceItem(source="incidents", label="Incidente", count=1),
-        entities=[_incident_entity(inc), *[_asset_entity(a) for a in detail.assets[:6]]],
+        entities=[_incident_entity(inc)]
+        + ([_asset_entity(a) for a in detail.assets[:6]] if include_assets else []),
     )
 
 
@@ -590,6 +656,14 @@ REGISTRY: dict[str, Tool] = {
     t.name: t
     for t in (
         Tool(
+            "find_dependency_path",
+            "Find a bounded connection path; edges retain direction.",
+            "relationships.read",
+            FindDependencyPathInput,
+            _t_find_dependency_path,
+            extra_permissions=("assets.read",),
+        ),
+        Tool(
             "search_assets",
             "Search / filter assets (name, criticality, environment, status).",
             "assets.read",
@@ -718,6 +792,11 @@ class ToolExecutor:
         tool = REGISTRY.get(name)
         return tool is not None and all(p in self._permissions for p in tool.required_permissions())
 
+    def family(self, name: str) -> str | None:
+        if not self.can(name):
+            return None
+        return REGISTRY[name].permission.split(".")[0]
+
     def call(self, name: str, params: dict[str, Any] | None = None) -> ToolResult:
         tool = REGISTRY.get(name)
         if tool is None:
@@ -726,10 +805,26 @@ class ToolExecutor:
             if required not in self._permissions:
                 raise ToolPermissionError(name, required)
         try:
-            validated = tool.input_model.model_validate(params or {})
+            validated = tool.input_model.model_validate({} if params is None else params)
         except ValidationError as exc:
-            raise ToolInputError(f"invalid input for {name!r}: {exc.errors()!r}") from exc
-        result = tool.run(self._db, validated)
+            raise ToolInputError("invalid tool arguments") from exc
+        if len(self.calls) >= 64:
+            raise ToolError("tool budget exceeded")
+        if name in ("search_assets", "get_asset"):
+            result = tool.run(
+                self._db, validated, include_incidents="incidents.read" in self._permissions
+            )
+        elif name == "get_incident":
+            result = tool.run(
+                self._db, validated, include_assets="assets.read" in self._permissions
+            )
+        else:
+            result = tool.run(self._db, validated)
+        data = _bounded_data(result.data)
+        if len(json.dumps(data, ensure_ascii=False)) > 24000:
+            raise ToolError("tool result budget exceeded; narrow the query")
+        result = ToolResult(data=data, evidence=result.evidence, entities=result.entities)
+        logging.getLogger(__name__).info("ai.tool.completed source=%s", self.family(name))
         self.calls.append(ToolCall(name, result))
         return result
 
@@ -750,3 +845,19 @@ class ToolExecutor:
             for e in c.result.entities:
                 seen.setdefault(f"{e.type}:{e.id}", e)
         return list(seen.values())[:limit]
+
+
+def _bounded_data(value: Any, depth: int = 0) -> Any:
+    """Valid JSON at every boundary; never slice a serialized JSON document."""
+    if depth > 10:
+        return "[truncated]"
+    if isinstance(value, str):
+        return value if len(value) <= 1200 else value[:1200] + " [truncated]"
+    if isinstance(value, list):
+        return [_bounded_data(v, depth + 1) for v in value[:50]]
+    if isinstance(value, dict):
+        result = {k: _bounded_data(v, depth + 1) for k, v in value.items()}
+        if any(isinstance(v, list) and len(v) > 50 for v in value.values()):
+            result["truncated"] = True
+        return result
+    return value

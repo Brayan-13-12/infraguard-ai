@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { AssetStatusBadge, CriticalityBadge } from "@/components/assets/AssetBadges";
+import { AskAiButton } from "@/components/ai/AskAiButton";
 import { assetTypeLabel, environmentLabel } from "@/components/assets/catalog";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -54,6 +55,7 @@ export function NodeInspector({
 
   return (
     <div className="flex flex-col gap-4 p-4">
+      <AskAiButton entity={{ type: "asset", id: node.id }} />
       <div>
         <h2 className="text-base font-semibold text-foreground">{node.name}</h2>
         <p className="mt-1 text-xs text-muted-foreground">

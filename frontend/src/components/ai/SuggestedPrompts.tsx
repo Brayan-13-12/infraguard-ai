@@ -7,6 +7,7 @@ import {
   ShieldIcon,
 } from "@/components/ui/icons";
 import { useTranslation } from "@/i18n";
+import { useAuth } from "@/components/AuthProvider";
 
 const GLOBAL_PROMPTS = [
   { key: "ai.suggestions.criticalAssets", icon: ActivityIcon },
@@ -24,6 +25,7 @@ export function SuggestedPrompts({
   prompts?: string[];
 }) {
   const { t } = useTranslation();
+  const { can } = useAuth();
 
   if (prompts && prompts.length > 0) {
     return (
@@ -44,7 +46,11 @@ export function SuggestedPrompts({
 
   return (
     <div className="grid w-full max-w-lg gap-2 sm:grid-cols-2">
-      {GLOBAL_PROMPTS.map(({ key, icon: Icon }) => {
+      {GLOBAL_PROMPTS.filter(({ key }) => {
+        if (key === "ai.suggestions.openIncidents") return can("incidents.read");
+        if (key === "ai.suggestions.recentChanges") return can("audit.read");
+        return can("assets.read");
+      }).map(({ key, icon: Icon }) => {
         const label = t(key);
         return (
           <button

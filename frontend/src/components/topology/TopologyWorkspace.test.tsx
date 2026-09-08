@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { forwardRef, useImperativeHandle } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TopologyWorkspace } from "@/components/topology/TopologyWorkspace";
 import { LanguageProvider } from "@/i18n";
@@ -159,6 +159,23 @@ function renderWorkspace(user = makeUser()) {
   );
 }
 
+function setTopologyViewport(wide: boolean) {
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches: query.includes("min-width: 1280px") ? wide : false,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
+
+beforeEach(() => {
+  setTopologyViewport(true);
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   mockSearchParams = new URLSearchParams("");
@@ -207,12 +224,99 @@ describe("TopologyWorkspace", () => {
 
     const aside = await screen.findByRole("complementary");
     expect(within(aside).getByText("prod-api-01")).toBeInTheDocument();
+    expect(within(aside).getByRole("link", { name: /preguntar a la ia/i })).toHaveAttribute(
+      "href",
+      "/ai?asset_id=a1",
+    );
     expect(within(aside).getByRole("link", { name: /ver activo/i })).toHaveAttribute(
       "href",
       "/assets/a1",
     );
     expect(within(aside).getByRole("button", { name: /centrar/i })).toBeInTheDocument();
     expect(within(aside).getByRole("button", { name: /expandir vecinos/i })).toBeInTheDocument();
+  });
+
+  it("uses the responsive inspector drawer below the desktop content width", async () => {
+    setTopologyViewport(false);
+    mockSearchParams = new URLSearchParams("asset_id=a1");
+    vi.spyOn(topologyService, "getSubgraph").mockResolvedValue({ ok: true, data: subgraph() });
+    mockImpactEmpty();
+
+    renderWorkspace();
+    const canvas = await screen.findByTestId("topology-canvas");
+    await userEvent.click(within(canvas).getByText("prod-api-01"));
+
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    const drawer = await screen.findByRole("dialog", { name: /detalles/i });
+    expect(within(drawer).getByRole("link", { name: /preguntar a la ia/i })).toHaveAttribute(
+      "href",
+      "/ai?asset_id=a1",
+    );
+    expect(within(drawer).getByRole("link", { name: /ver activo/i })).toHaveAttribute(
+      "href",
+      "/assets/a1",
+    );
+    expect(within(drawer).getByRole("button", { name: /centrar/i })).toBeInTheDocument();
+    expect(screen.getByTestId("topology-canvas")).toBeInTheDocument();
+
+    await userEvent.click(within(drawer).getByRole("button", { name: /cerrar/i }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: /detalles/i })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByTestId("topology-canvas")).toBeInTheDocument();
+  });
+
+  it("keeps narrow filters accessible and functional without removing the graph", async () => {
+    setTopologyViewport(false);
+    mockSearchParams = new URLSearchParams("asset_id=a1");
+    const getSubgraph = vi.spyOn(topologyService, "getSubgraph").mockResolvedValue({
+      ok: true,
+      data: subgraph(),
+    });
+
+    renderWorkspace();
+    await screen.findByTestId("topology-canvas");
+    await userEvent.click(screen.getByRole("button", { name: /^filtros$/i }));
+
+    const filters = await screen.findByRole("dialog", { name: /^filtros$/i });
+    await userEvent.selectOptions(
+      within(filters).getByRole("combobox", { name: /tipo de relación/i }),
+      "Depende de",
+    );
+
+    await waitFor(() =>
+      expect(getSubgraph).toHaveBeenLastCalledWith(
+        expect.objectContaining({ relationshipType: ["depends_on"] }),
+      ),
+    );
+    expect(await screen.findByTestId("topology-canvas")).toBeInTheDocument();
+
+    await userEvent.click(within(filters).getByRole("button", { name: /cerrar/i }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: /^filtros$/i })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: /^filtros$/i })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  it("lets narrow filters take over the canvas instead of stacking over the inspector", async () => {
+    setTopologyViewport(false);
+    mockSearchParams = new URLSearchParams("asset_id=a1");
+    vi.spyOn(topologyService, "getSubgraph").mockResolvedValue({ ok: true, data: subgraph() });
+    mockImpactEmpty();
+
+    renderWorkspace();
+    const canvas = await screen.findByTestId("topology-canvas");
+    await userEvent.click(within(canvas).getByText("prod-api-01"));
+    await screen.findByRole("dialog", { name: /detalles/i });
+
+    await userEvent.click(screen.getByRole("button", { name: /^filtros$/i }));
+
+    expect(await screen.findByRole("dialog", { name: /^filtros$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /detalles/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId("topology-canvas")).toBeInTheDocument();
   });
 
   it("selecting an edge shows the edge inspector with source, type and target", async () => {

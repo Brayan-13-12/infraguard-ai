@@ -1,5 +1,7 @@
 # InfraGuard AI - Backend
 
+> **AI Assistant v2:** See the [current provider, streaming, security and setup guide](../docs/ai-assistant-v2.md). Historical v1 sections below describe the foundation; the v2 guide supersedes their provider, streaming and retry details.
+
 FastAPI service for InfraGuard AI.
 
 * **v0.1** - health endpoints (liveness / readiness / summary) + wiring.
@@ -441,7 +443,7 @@ app/services/ai/
 └── providers/
     ├── base.py          # AIProvider ABC, ProviderRequest/Result, SYSTEM_BOUNDARY
     ├── deterministic.py  # default; no API key; real tools + intent matching
-    ├── openai.py         # optional; stdlib urllib; behind the same ABC
+    ├── openai.py         # official OpenAI SDK Responses; behind the same ABC
     └── __init__.py       # build_provider() from settings; lru_cache; get_provider()
 ```
 
@@ -534,7 +536,7 @@ trailing user message, so the sweep only ever touches a genuinely dangling turn.
   intent → *"Esta consulta requiere un proveedor de IA avanzado…"*. A
   `ToolPermissionError` → *"No tienes permiso para consultar {la Auditoría}…"*.
   It never invents an entity or a fact.
-- **`OpenAIProvider`** (optional) - stdlib `urllib` (no new runtime dep), tool
+- **`OpenAIProvider`** (optional) - official SDK Responses API, tool
   schemas from each `input_model`, a bounded tool-call loop, `SYSTEM_BOUNDARY`
   system prompt, `ProviderTimeout` / `ProviderUnavailable` on transport error.
   `ready = bool(api_key)`; if not ready the Assistant degrades gracefully and the

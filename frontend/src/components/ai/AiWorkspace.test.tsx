@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -131,6 +131,46 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("AiWorkspace", () => {
+  it("streams one user bubble, activity, deltas and canonical sources", async () => {
+    vi.mocked(aiService.getCapabilities).mockResolvedValue({ ok: true, data: { ...CAPS, streaming: true } });
+    vi.spyOn(aiService, "createConversation").mockResolvedValue({ ok: true, data: detail() });
+    let emit!: Parameters<typeof aiService.streamMessage>[3];
+    let complete!: (value: aiService.AIResult<AIChatResponse>) => void;
+    vi.spyOn(aiService, "streamMessage").mockImplementation((_c, _text, _id, onEvent) => {
+      emit = onEvent;
+      return new Promise((resolve) => { complete = resolve; });
+    });
+    renderWorkspace();
+    await userEvent.click(await screen.findByRole("button", { name: /activos críticos de producción/i }));
+    await waitFor(() => expect(aiService.streamMessage).toHaveBeenCalledOnce());
+    expect(screen.getAllByText("Tú")).toHaveLength(1);
+    act(() => emit({ type: "tool.started", source: "assets" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Consultando activos");
+    act(() => emit({ type: "text.delta", delta: "Respuesta parcial" }));
+    expect(screen.getByText("Respuesta parcial")).toBeInTheDocument();
+    act(() => complete({ ok: true, data: chatResponse() }));
+    expect(await screen.findByText("Encontré 3 activos críticos en producción.")).toBeInTheDocument();
+    expect(screen.getAllByText("Tú")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: /prod-api-01/i })).toHaveAttribute("href", "/assets/a1");
+  });
+
+  it("stream retry retains request identity and clears partial answer", async () => {
+    vi.mocked(aiService.getCapabilities).mockResolvedValue({ ok: true, data: { ...CAPS, streaming: true } });
+    vi.spyOn(aiService, "createConversation").mockResolvedValue({ ok: true, data: detail() });
+    const stream = vi.spyOn(aiService, "streamMessage")
+      .mockImplementationOnce(async (_c, _text, _id, emit) => {
+        emit({ type: "text.delta", delta: "No guardar este parcial" });
+        return { ok: false, error: { kind: "provider_timeout" } };
+      }).mockResolvedValueOnce({ ok: true, data: chatResponse() });
+    renderWorkspace();
+    await userEvent.click(await screen.findByRole("button", { name: /activos críticos de producción/i }));
+    const retry = await screen.findByRole("button", { name: /reintentar/i });
+    expect(screen.queryByText("No guardar este parcial")).not.toBeInTheDocument();
+    await userEvent.click(retry);
+    await screen.findByText("Encontré 3 activos críticos en producción.");
+    expect(stream.mock.calls[0]?.[2]).toBe(stream.mock.calls[1]?.[2]);
+    expect(screen.getAllByText("Tú")).toHaveLength(1);
+  });
   it("shows the empty state with the investigation prompt and suggestions", async () => {
     renderWorkspace();
     expect(await screen.findByText("¿Qué quieres investigar?")).toBeInTheDocument();
