@@ -3,12 +3,12 @@
 import { Suspense } from "react";
 
 import { RequirePermission } from "@/components/auth/RequirePermission";
-import { AssetsBrowser } from "@/components/assets/AssetsBrowser";
+import { AssetsWorkspace } from "@/components/assets/AssetsWorkspace";
 import { Spinner } from "@/components/ui/Spinner";
 
 export default function AssetsPage() {
   return (
-    <RequirePermission permission="assets.read">
+    <RequirePermission anyOf={["assets.read", "relationships.read"]}>
       <Suspense
         fallback={
           <div className="flex justify-center py-20">
@@ -16,7 +16,7 @@ export default function AssetsPage() {
           </div>
         }
       >
-        <AssetsBrowser />
+        <AssetsWorkspace />
       </Suspense>
     </RequirePermission>
   );

@@ -92,7 +92,6 @@ describe("AssetDetailWorkspace", () => {
       "Resumen",
       "Información técnica",
       "Incidentes",
-      "Dependencias",
       "Actividad",
     ]);
     // Resumen (default)

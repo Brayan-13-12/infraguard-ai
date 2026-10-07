@@ -19,14 +19,18 @@ export function EdgeInspector({
   relationship,
   onChanged,
   onDeleted,
+  inlineForms = false,
+  readOnly = false,
 }: {
   relationship: RelationshipDetail;
+  inlineForms?: boolean;
+  readOnly?: boolean;
   onChanged: (updated: RelationshipDetail) => void;
   onDeleted: () => void;
 }) {
   const { t } = useTranslation();
   const { can } = useAuth();
-  const canManage = can("relationships.manage");
+  const canManage = !readOnly && can("relationships.manage");
   const [editing, setEditing] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -43,6 +47,12 @@ export function EdgeInspector({
     setConfirmingDelete(false);
     onDeleted();
   }
+
+  if (inlineForms && editing && canManage) return <EditRelationshipDialog inline relationship={relationship} onClose={() => setEditing(false)} onSaved={(updated) => {
+    setEditing(false);
+    toast({ tone: "success", description: t("relationships.updatedToast") });
+    onChanged(updated);
+  }} />;
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -80,8 +90,9 @@ export function EdgeInspector({
         </div>
       ) : null}
 
-      {editing ? (
+      {editing && canManage ? (
         <EditRelationshipDialog
+          inline={inlineForms}
           relationship={relationship}
           onClose={() => setEditing(false)}
           onSaved={(updated) => {
@@ -93,7 +104,7 @@ export function EdgeInspector({
       ) : null}
 
       <ConfirmDialog
-        open={confirmingDelete}
+        open={confirmingDelete && canManage}
         onClose={() => setConfirmingDelete(false)}
         onConfirm={() => void confirmDelete()}
         title={t("relationships.deleteConfirmTitle")}

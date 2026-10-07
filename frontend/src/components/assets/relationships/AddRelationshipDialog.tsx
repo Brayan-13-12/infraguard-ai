@@ -6,7 +6,7 @@ import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
-import { Dialog } from "@/components/ui/overlay";
+import { RelationshipFormSurface } from "./RelationshipFormSurface";
 import { useTranslation } from "@/i18n";
 import { RELATIONSHIP_DESCRIPTION_MAX_LENGTH } from "@/lib/config";
 import { createRelationship } from "@/services/relationships";
@@ -23,11 +23,15 @@ import { RelationshipAssetPicker } from "./RelationshipAssetPicker";
  */
 export function AddRelationshipDialog({
   sourceAsset,
+  targetAsset,
   onClose,
+  inline = false,
   onCreated,
 }: {
-  sourceAsset: Asset;
+  sourceAsset: Pick<Asset, "id" | "name">;
+  targetAsset?: Pick<Asset, "id" | "name">;
   onClose: () => void;
+  inline?: boolean;
   onCreated: (relationship: RelationshipDetail) => void;
 }) {
   const { t } = useTranslation();
@@ -40,15 +44,21 @@ export function AddRelationshipDialog({
   const typeOptions = relationshipTypeOptions(t);
 
   async function submit() {
-    if (!target) {
+    const endpoint = targetAsset ?? target;
+    if (saving) return;
+    if (!endpoint) {
       setError(t("relationships.add.errorNoTarget"));
+      return;
+    }
+    if (endpoint.id === sourceAsset.id) {
+      setError(t("dependencies.create.errorSameAsset"));
       return;
     }
     setSaving(true);
     setError(null);
     const res = await createRelationship({
       source_asset_id: sourceAsset.id,
-      target_asset_id: target.id,
+      target_asset_id: endpoint.id,
       relationship_type: type,
       description: description.trim() || null,
     });
@@ -64,7 +74,8 @@ export function AddRelationshipDialog({
   }
 
   return (
-    <Dialog
+    <RelationshipFormSurface
+      inline={inline}
       open
       onClose={saving ? () => {} : onClose}
       title={t("relationships.add.title")}
@@ -87,7 +98,7 @@ export function AddRelationshipDialog({
           <span className="text-sm font-medium text-foreground">
             {t("relationships.add.sourceLabel")}
           </span>
-          <p className="mt-1.5 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-foreground">
+          <p className="mt-1.5 break-words rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-foreground">
             {sourceAsset.name}
           </p>
         </div>
@@ -100,12 +111,14 @@ export function AddRelationshipDialog({
           disabled={saving}
         />
 
-        <RelationshipAssetPicker
-          value={target}
-          onChange={setTarget}
-          excludeId={sourceAsset.id}
-          disabled={saving}
-        />
+        {targetAsset ? (
+          <div>
+            <span className="text-sm font-medium text-foreground">{t("relationships.picker.label")}</span>
+            <p className="mt-1.5 break-words rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-foreground">{targetAsset.name}</p>
+          </div>
+        ) : (
+          <RelationshipAssetPicker value={target} onChange={setTarget} excludeId={sourceAsset.id} disabled={saving} />
+        )}
 
         <Textarea
           label={t("relationships.add.descriptionLabel")}
@@ -118,6 +131,6 @@ export function AddRelationshipDialog({
 
         {error ? <Alert tone="danger">{error}</Alert> : null}
       </div>
-    </Dialog>
+    </RelationshipFormSurface>
   );
 }

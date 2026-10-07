@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { assetGraphHref } from "@/lib/assetsRoutes";
 
 import { AssetStatusBadge, CriticalityBadge } from "@/components/assets/AssetBadges";
 import { relationshipTypeLabel } from "@/components/assets/relationships/catalog";
@@ -82,7 +83,7 @@ export function RelationshipRow({
 
       <div className="flex shrink-0 items-center gap-0.5 self-end opacity-0 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100 sm:self-center">
         <Link
-          href={`/topology?asset_id=${encodeURIComponent(relationship.source_asset_id)}`}
+          href={assetGraphHref(relationship.source_asset_id)}
           aria-label={t("dependencies.row.viewSourceTopology")}
           title={t("dependencies.row.viewSourceTopology")}
           className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"

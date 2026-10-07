@@ -64,38 +64,30 @@ export function Sidebar() {
           collapsed ? "justify-center px-0" : "gap-2.5 px-4",
         )}
       >
-        <BrandMark />
         {!collapsed ? (
           <>
+            <BrandMark className="shrink-0" />
             <span className="flex-1 truncate text-sm font-semibold tracking-tight text-foreground">
               InfraGuard AI
             </span>
-            <button
-              type="button"
-              onClick={toggle}
-              aria-expanded={!collapsed}
-              aria-label={t("a11y.collapseNav")}
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-            >
-              <PanelLeftIcon />
-            </button>
           </>
-        ) : null}
+        ) : <span className="sr-only">InfraGuard AI</span>}
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={!collapsed}
+          aria-label={t(collapsed ? "a11y.expandNav" : "a11y.collapseNav")}
+          title={t(collapsed ? "a11y.expandNav" : "a11y.collapseNav")}
+          className="group/brand relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        >
+          {collapsed ? (
+            <BrandMark className="transition-opacity duration-150 group-hover/brand:opacity-0 group-focus-visible/brand:opacity-0 motion-reduce:transition-none" />
+          ) : null}
+          <PanelLeftIcon className={cn(
+            collapsed && "absolute opacity-0 transition-opacity duration-150 group-hover/brand:opacity-100 group-focus-visible/brand:opacity-100 motion-reduce:transition-none",
+          )} />
+        </button>
       </div>
-
-      {collapsed ? (
-        <div className="flex shrink-0 justify-center border-b border-sidebar-border py-2">
-          <button
-            type="button"
-            onClick={toggle}
-            aria-expanded={!collapsed}
-            aria-label={t("a11y.expandNav")}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          >
-            <PanelLeftIcon />
-          </button>
-        </div>
-      ) : null}
 
       <nav
         aria-label={t("a11y.primaryNav")}

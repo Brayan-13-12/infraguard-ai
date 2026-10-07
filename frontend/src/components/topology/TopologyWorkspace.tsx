@@ -3,6 +3,9 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useAuth } from "@/components/AuthProvider";
+import { AddRelationshipDialog } from "@/components/assets/relationships/AddRelationshipDialog";
+import { toast } from "@/components/ui/toast";
 import { relationshipTypeLabel } from "@/components/assets/relationships/catalog";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
@@ -43,8 +46,20 @@ function mergeSubgraphs(base: SubgraphResponse, extra: SubgraphResponse): Subgra
   };
 }
 
-export function TopologyWorkspace() {
+export function TopologyWorkspace({ title }: { title?: string } = {}) {
   const { t } = useTranslation();
+  const { can } = useAuth();
+  const canManage = can("relationships.manage");
+  const [creationSource, setCreationSource] = useState<TopologyNode | null>(null);
+  const [creationTarget, setCreationTarget] = useState<TopologyNode | null>(null);
+  const [creationError, setCreationError] = useState(false);
+  const [persistedRevision, setPersistedRevision] = useState(0);
+  function cancelCreation() {
+    setCreationSource(null);
+    setCreationTarget(null);
+    setCreationError(false);
+  }
+  useEffect(() => { if (!canManage) cancelCreation(); }, [canManage]);
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -65,6 +80,7 @@ export function TopologyWorkspace() {
 
   const fetchRoot = useCallback(
     (assetId: string, currentFilters: TopologyFilterState) => {
+      cancelCreation();
       setState({ kind: "loading" });
       setSelectedNodeId(null);
       setSelectedEdgeId(null);
@@ -155,13 +171,16 @@ export function TopologyWorkspace() {
       setSelectedEdgeDetail(undefined);
       return;
     }
+    let cancelled = false;
+    setSelectedEdgeDetail(undefined);
     void getAssetRelationships(selectedEdge.source_asset_id).then((res) => {
-      if (!res.ok) return;
+      if (cancelled || !res.ok) return;
       const found = [...res.data.outgoing, ...res.data.incoming].find(
         (r) => r.id === selectedEdge.id,
       );
       setSelectedEdgeDetail(found);
     });
+    return () => { cancelled = true; };
   }, [selectedEdge]);
 
   useEffect(() => {
@@ -169,12 +188,6 @@ export function TopologyWorkspace() {
     if (selectedNodeId || selectedEdgeId) setFiltersOpen(false);
   }, [selectedNodeId, selectedEdgeId]);
 
-  useEffect(() => {
-    const id = window.requestAnimationFrame(() => {
-      canvasRef.current?.fitView();
-    });
-    return () => window.cancelAnimationFrame(id);
-  }, [filtersOpen, inspectorOpenResponsive]);
 
   const counts = useMemo(() => {
     if (!selectedNodeId || state.kind !== "ready") return { incoming: 0, outgoing: 0 };
@@ -183,14 +196,38 @@ export function TopologyWorkspace() {
     return { incoming, outgoing };
   }, [selectedNodeId, state]);
 
+  function selectNode(id: string | null) {
+    if (creationSource && canManage) {
+      if (!id || state.kind !== "ready") return;
+      if (id === creationSource.id) { setCreationError(true); return; }
+      const target = state.data.nodes.find((node) => node.id === id);
+      if (target) { setCreationError(false); setCreationTarget(target); }
+      return;
+    }
+    setSelectedNodeId(id);
+    setSelectedEdgeId(null);
+  }
+
+  useEffect(() => {
+    if (creationSource && (state.kind !== "ready" || !state.data.nodes.some((node) => node.id === creationSource.id))) cancelCreation();
+  }, [state, creationSource]);
+
   const inspector =
-    selectedNode ? (
+    creationSource ? null : selectedNode ? (
       <NodeInspector
         node={selectedNode}
         incomingCount={counts.incoming}
         outgoingCount={counts.outgoing}
-        onFocus={() => focusAsset(selectedNode.id)}
+        onFocus={() => canvasRef.current?.centerNode(selectedNode.id)}
         onExpand={() => expandNeighbors(selectedNode.id)}
+        onCreateRelationship={canManage && !listView ? () => {
+          setCreationSource(selectedNode);
+          setCreationTarget(null);
+          setCreationError(false);
+          setSelectedNodeId(null);
+          setSelectedEdgeId(null);
+          setInspectorOpenResponsive(false);
+        } : undefined}
       />
     ) : selectedEdgeDetail ? (
       <EdgeInspector
@@ -210,14 +247,14 @@ export function TopologyWorkspace() {
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-            {t("topology.title")}
+            {title ?? t("topology.title")}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">{t("topology.subtitle")}</p>
         </div>
-        <TopologySearch onSelect={(a) => focusAsset(a.id)} />
       </div>
 
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-xl border border-border bg-surface p-3">
+        <TopologySearch onSelect={(a) => focusAsset(a.id)} />
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <TopologyFilters
             value={filters}
@@ -240,14 +277,22 @@ export function TopologyWorkspace() {
         <Button
           variant={listView ? "secondary" : "ghost"}
           size="sm"
-          onClick={() => setListView((v) => !v)}
+          onClick={() => { cancelCreation(); setListView((v) => !v); }}
           aria-pressed={listView}
-          className="shrink-0"
+          className="ml-auto shrink-0"
         >
           <ListIcon className="h-4 w-4" />
           {t("topology.toolbar.listView")}
         </Button>
       </div>
+
+      {creationSource && canManage ? (
+        <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/40 bg-primary/5 p-3 text-sm">
+          <p className="min-w-0 break-words">{t("topology.create.chooseTarget", { name: creationSource.name })}</p>
+          <Button variant="secondary" size="sm" onClick={cancelCreation}>{t("fieldEdit.cancel")}</Button>
+          {creationError ? <Alert tone="danger">{t("dependencies.create.errorSameAsset")}</Alert> : null}
+        </div>
+      ) : null}
 
       {state.kind === "ready" && state.data.truncated ? (
         <Alert tone="warning">
@@ -288,14 +333,14 @@ export function TopologyWorkspace() {
           ) : (
             <TopologyCanvas
               ref={canvasRef}
+              persistedRevision={persistedRevision}
+              onRestoreData={(restored) => setState({ kind: "ready", data: restored })}
               data={state.data}
               selectedNodeId={selectedNodeId}
               selectedEdgeId={selectedEdgeId}
-              onNodeSelect={(id) => {
-                setSelectedNodeId(id);
-                setSelectedEdgeId(null);
-              }}
+              onNodeSelect={selectNode}
               onEdgeSelect={(id) => {
+                if (creationSource) return;
                 setSelectedEdgeId(id);
                 setSelectedNodeId(null);
               }}
@@ -314,6 +359,28 @@ export function TopologyWorkspace() {
           </aside>
         ) : null}
       </div>
+
+      {creationSource && creationTarget && canManage ? (
+        <AddRelationshipDialog
+          sourceAsset={creationSource}
+          targetAsset={creationTarget}
+          onClose={() => setCreationTarget(null)}
+          onCreated={(relationship) => {
+            // Only the successful canonical API response supplies the new edge.
+            setState((previous) => previous.kind === "ready" ? {
+              kind: "ready", data: { ...previous.data, edges: [
+                ...previous.data.edges.filter((edge) => edge.id !== relationship.id),
+                { id: relationship.id, source_asset_id: relationship.source_asset_id,
+                  target_asset_id: relationship.target_asset_id, relationship_type: relationship.relationship_type },
+              ] },
+            } : previous);
+            setPersistedRevision((revision) => revision + 1);
+            setSelectedNodeId(relationship.source_asset_id);
+            cancelCreation();
+            toast({ tone: "success", description: t("relationships.createdToast") });
+          }}
+        />
+      ) : null}
 
       <Drawer
         open={!wideInspectorLayout && inspectorOpenResponsive && inspector !== null}

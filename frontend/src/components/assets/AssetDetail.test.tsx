@@ -57,20 +57,21 @@ describe("AssetDetail (full page)", () => {
   it("renders the header, tabs and the summary fields; no separate Edit route link", () => {
     renderDetail(ASSET);
     expect(screen.getByRole("heading", { name: "billing-api", level: 1 })).toBeInTheDocument();
-    expect(screen.getAllByRole("tab")).toHaveLength(5);
+    expect(screen.getAllByRole("tab")).toHaveLength(4);
+    expect(screen.queryByRole("tab", { name: "Dependencias" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Ver en grafo" })).toHaveAttribute("href", "/assets?section=map&view=graph&asset_id=abc-123");
     expect(screen.getByText("payments-team")).toBeInTheDocument();
     expect(screen.getByText("Handles invoicing.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /editar/i })).not.toBeInTheDocument();
   });
 
-  it("renders exactly the five tabs (Resumen, Información técnica, Incidentes, Dependencias, Actividad) in order via the real render path, with the old placeholder gone", async () => {
+  it("renders exactly the four tabs (Resumen, Información técnica, Incidentes, Actividad) in order via the real render path, with the old placeholder gone", async () => {
     renderDetail(ASSET);
     const tabs = screen.getAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent)).toEqual([
       "Resumen",
       "Información técnica",
       "Incidentes",
-      "Dependencias",
       "Actividad",
     ]);
 
