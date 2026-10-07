@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import { MockAuthProvider } from "@/test/MockAuthProvider";
 import { AssetsTable } from "@/components/assets/AssetsTable";
 import { LanguageProvider } from "@/i18n";
 import type { Asset } from "@/types/asset";
@@ -40,7 +41,7 @@ const make = (over: Partial<Asset>): Asset => ({
 function renderTable(assets: Asset[]) {
   return render(
     <LanguageProvider>
-      <AssetsTable assets={assets} />
+      <MockAuthProvider><AssetsTable assets={assets} /></MockAuthProvider>
     </LanguageProvider>,
   );
 }
@@ -79,7 +80,10 @@ describe("AssetsTable", () => {
 
   it("stretches the name link over the whole row (detail) and offers an edit quick action", () => {
     renderTable([make({ id: "x", name: "web-01" })]);
-    // The row-detail link (stretched) + a separate edit link.
+    const graphLinks = screen.getAllByRole("link", { name: "Ver en grafo" });
+    expect(graphLinks).toHaveLength(2);
+    for (const link of graphLinks) expect(link).toHaveAttribute("href", "/assets?section=map&view=graph&asset_id=x");
+    // The row-detail link (stretched) + separate actions.
     const [detail] = screen.getAllByRole("link", { name: "web-01" });
     expect(detail).toHaveAttribute("href", "/assets/x");
     expect(detail!.className).toMatch(/after:inset-0/);
@@ -91,10 +95,10 @@ describe("AssetsTable", () => {
   it("highlights the freshly created row when highlightId matches", () => {
     render(
       <LanguageProvider>
-        <AssetsTable
+        <MockAuthProvider><AssetsTable
           assets={[make({ id: "new-1", name: "created" }), make({ id: "old", name: "old-01" })]}
           highlightId="new-1"
-        />
+        /></MockAuthProvider>
       </LanguageProvider>,
     );
     const highlighted = screen

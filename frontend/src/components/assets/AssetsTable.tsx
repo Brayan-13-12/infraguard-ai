@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 
+import { ViewInGraph } from "./ViewInGraph";
 import { Badge } from "@/components/ui/Badge";
 import { ChevronRightIcon, PencilIcon } from "@/components/ui/icons";
 import { LANGUAGE_LOCALES, useTranslation } from "@/i18n";
@@ -120,6 +121,7 @@ export function AssetsTable({
                 </td>
                 <td className="text-right">
                   <span className="flex items-center justify-end gap-0.5">
+                    <ViewInGraph assetId={asset.id} compact />
                     <EditAction
                       asset={asset}
                       className="opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"
@@ -148,6 +150,7 @@ export function AssetsTable({
               <NameLink asset={asset} />
               <span className="relative z-[1] flex items-center gap-1">
                 <CriticalityBadge value={asset.criticality} />
+                <ViewInGraph assetId={asset.id} compact />
                 <EditAction asset={asset} />
               </span>
             </div>

@@ -4,9 +4,6 @@ import {
   BoxIcon,
   HistoryIcon,
   LayoutIcon,
-  LinkIcon,
-  NetworkIcon,
-  SettingsIcon,
   ShieldIcon,
   SparklesIcon,
   TrashIcon,
@@ -17,12 +14,7 @@ import { ADMIN_PERMISSIONS, type Permission } from "@/lib/permissions";
 export type NavStatus = "active" | "soon";
 
 export interface NavItem {
-  /**
-   * Product / module name - always English, never translated (proper nouns for
-   * the platform's areas, consistent across locales). Exception: `Dependencias`
-   * is deliberately Spanish (matching the Asset-detail tab of the same name)
-   * per an explicit product decision for this module.
-   */
+  /** Product/module name, kept consistent across locales. */
   label: string;
   href: string;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
@@ -36,9 +28,7 @@ export interface NavItem {
 }
 
 /**
- * A single, flat navigation list - no visible section headings. Every item is
- * a real route except `Settings`, shown as `aria-disabled` (not navigable)
- * with a quiet lock marker + "Próximamente" tooltip.
+ * A single, flat navigation list with no visible section headings.
  *
  * Items with a `permission` are filtered out by {@link visibleNavItems} for
  * users whose roles do not grant it.
@@ -50,7 +40,7 @@ export const NAV_ITEMS: NavItem[] = [
     href: "/assets",
     icon: BoxIcon,
     status: "active",
-    permission: "assets.read",
+    permission: ["assets.read", "relationships.read"],
   },
   {
     label: "Incidents",
@@ -58,23 +48,6 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ShieldIcon,
     status: "active",
     permission: "incidents.read",
-  },
-  {
-    label: "Dependencias",
-    href: "/dependencies",
-    icon: LinkIcon,
-    status: "active",
-    permission: "relationships.read",
-  },
-  {
-    label: "Topology",
-    href: "/topology",
-    icon: NetworkIcon,
-    status: "active",
-    // The backend additionally requires assets.read (§49) - every system role
-    // that grants relationships.read already grants assets.read alongside it,
-    // so this stays a single-permission visibility hint like every other item.
-    permission: "relationships.read",
   },
   {
     label: "Audit",
@@ -104,7 +77,6 @@ export const NAV_ITEMS: NavItem[] = [
     status: "active",
     permission: "ai.use",
   },
-  { label: "Settings", href: "/settings", icon: SettingsIcon, status: "soon" },
 ];
 
 /** Nav items the caller may see, given their effective permissions. */

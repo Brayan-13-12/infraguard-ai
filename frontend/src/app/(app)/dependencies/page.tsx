@@ -1,23 +1,14 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { Suspense } from "react";
-
-import { RequirePermission } from "@/components/auth/RequirePermission";
-import { DependenciesBrowser } from "@/components/dependencies/DependenciesBrowser";
-import { Spinner } from "@/components/ui/Spinner";
-
-export default function DependenciesPage() {
-  return (
-    <RequirePermission permission="relationships.read">
-      <Suspense
-        fallback={
-          <div className="flex justify-center py-20">
-            <Spinner decorative />
-          </div>
-        }
-      >
-        <DependenciesBrowser />
-      </Suspense>
-    </RequirePermission>
-  );
+export default async function LegacyPage({ searchParams }: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(await searchParams)) {
+    if (Array.isArray(value)) value.forEach((item) => query.append(key, item));
+    else if (value !== undefined) query.set(key, value);
+  }
+  query.set("section", "map");
+  query.set("view", "relations");
+  redirect(`/assets?${query}`);
 }
