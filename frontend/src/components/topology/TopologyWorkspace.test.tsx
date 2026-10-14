@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { forwardRef, useImperativeHandle } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -183,6 +183,62 @@ afterEach(() => {
 });
 
 describe("TopologyWorkspace", () => {
+  async function startCreation() {
+    mockSearchParams = new URLSearchParams("asset_id=a1");
+    vi.spyOn(topologyService, "getSubgraph").mockResolvedValue({ ok: true, data: subgraph() });
+    mockImpactEmpty();
+    renderWorkspace();
+    await userEvent.click(await screen.findByRole("button", { name: "prod-api-01" }));
+    await userEvent.click(screen.getByRole("button", { name: "Crear relación" }));
+  }
+
+  it("creates a canonical directed edge with fixed graph endpoints and stays in the graph", async () => {
+    const create = vi.spyOn(relationshipsService, "createRelationship").mockResolvedValue({ ok: true, data: relationshipDetail({ id: "new-edge", relationship_type: "uses" }) });
+    setTopologyViewport(false);
+    await startCreation();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Origen: prod-api-01");
+    await userEvent.click(screen.getByRole("button", { name: "prod-db-primary" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("prod-api-01")).toBeInTheDocument();
+    expect(within(dialog).getByText("prod-db-primary")).toBeInTheDocument();
+    await userEvent.selectOptions(within(dialog).getByLabelText("Tipo de relación"), "uses");
+    await userEvent.type(within(dialog).getByLabelText("Descripción (opcional)"), "  Graph relationship  ");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Crear relación" }));
+    expect(create).toHaveBeenCalledWith({ source_asset_id: "a1", target_asset_id: "a2", relationship_type: "uses", description: "Graph relationship" });
+    expect(await screen.findByRole("button", { name: "edge-new-edge" })).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("rejects a self target and lets the user cancel without writing", async () => {
+    const create = vi.spyOn(relationshipsService, "createRelationship");
+    await startCreation();
+    await userEvent.click(screen.getByRole("button", { name: "prod-api-01" }));
+    expect(screen.getByText("El activo de origen y el de destino deben ser diferentes.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByText(/Origen: prod-api-01/)).not.toBeInTheDocument();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it.each(["duplicate", "asset_trashed", "not_found", "forbidden"] as const)("keeps failed %s creation in the dialog without adding an edge", async (kind) => {
+    vi.spyOn(relationshipsService, "createRelationship").mockResolvedValue({ ok: false, error: { kind, message: "Rejected" } });
+    await startCreation();
+    await userEvent.click(screen.getByRole("button", { name: "prod-db-primary" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Crear relación" }));
+    expect(await within(screen.getByRole("dialog")).findByRole("alert")).toBeInTheDocument();
+    expect(within(screen.getByTestId("topology-canvas")).getAllByRole("button")).toHaveLength(3);
+  });
+
+  it("hides graph creation without relationship management permission", async () => {
+    mockSearchParams = new URLSearchParams("asset_id=a1");
+    vi.spyOn(topologyService, "getSubgraph").mockResolvedValue({ ok: true, data: subgraph() });
+    mockImpactEmpty();
+    renderWorkspace(makeUser({ permissions: ["assets.read", "relationships.read"] }));
+    await userEvent.click(await screen.findByRole("button", { name: "prod-api-01" }));
+    expect(screen.queryByRole("button", { name: "Crear relación" })).not.toBeInTheDocument();
+  });
+
   it("shows the no-focus empty state when there is no asset in the URL", async () => {
     renderWorkspace();
     expect(await screen.findByText("Ningún activo seleccionado")).toBeInTheDocument();
@@ -337,6 +393,23 @@ describe("TopologyWorkspace", () => {
     expect(within(aside).getByText("Depende de")).toBeInTheDocument();
     expect(within(aside).getByText("prod-db-primary")).toBeInTheDocument();
     expect(within(aside).getByText("Depende para leer/escribir datos.")).toBeInTheDocument();
+  });
+
+  it("ignores an obsolete edge detail response after another edge is selected", async () => {
+    mockSearchParams = new URLSearchParams("asset_id=a1");
+    vi.spyOn(topologyService, "getSubgraph").mockResolvedValue({ ok: true, data: subgraph({ edges: [edge(), edge({ id: "e2" })] }) });
+    let finishFirst!: (value: Awaited<ReturnType<typeof relationshipsService.getAssetRelationships>>) => void;
+    vi.spyOn(relationshipsService, "getAssetRelationships")
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+      .mockResolvedValueOnce({ ok: true, data: grouped({ outgoing: [relationshipDetail({ id: "e2", description: "Current edge" })] }) });
+    renderWorkspace();
+    const canvas = await screen.findByTestId("topology-canvas");
+    await userEvent.click(within(canvas).getByRole("button", { name: "edge-e1" }));
+    await userEvent.click(within(canvas).getByRole("button", { name: "edge-e2" }));
+    expect(await screen.findByText("Current edge")).toBeInTheDocument();
+    await act(async () => { finishFirst({ ok: true, data: grouped({ outgoing: [relationshipDetail({ description: "Obsolete edge" })] }) }); });
+    expect(screen.queryByText("Obsolete edge")).not.toBeInTheDocument();
+    expect(screen.getByText("Current edge")).toBeInTheDocument();
   });
 
   it("expands neighbors and merges the new nodes without refetching everything", async () => {

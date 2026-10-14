@@ -64,7 +64,7 @@ type LoadState =
   | { kind: "loaded"; data: AssetPage }
   | { kind: "error" };
 
-export function AssetsBrowser() {
+export function AssetsBrowser({ title }: { title?: string } = {}) {
   const { t } = useTranslation();
   const { can } = useAuth();
   const canCreate = can("assets.create");
@@ -177,7 +177,7 @@ export function AssetsBrowser() {
     <div className="flex flex-col gap-6">
       <Reveal>
         <PageHeader
-          title="Assets"
+          title={title ?? "Assets"}
           description={t("assets.subtitle")}
           actions={
             canCreate ? (

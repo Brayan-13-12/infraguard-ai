@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 
 import { useAuth } from "@/components/AuthProvider";
 import { AskAiButton } from "@/components/ai/AskAiButton";
-import { AssetDependenciesTab } from "@/components/assets/relationships/AssetDependenciesTab";
+import { ViewInGraph } from "./ViewInGraph";
 import { RelatedIncidents } from "@/components/incidents/RelatedIncidents";
 import { Alert } from "@/components/ui/Alert";
 import { Badge } from "@/components/ui/Badge";
@@ -255,7 +255,6 @@ export function AssetDetailContent({
     { id: "summary", labelKey: "assetDetail.tabs.summary" },
     { id: "technical", labelKey: "assetDetail.tabs.technical" },
     { id: "incidents", labelKey: "assetDetail.tabs.incidents" },
-    { id: "dependencies", labelKey: "assetDetail.tabs.dependencies" },
     { id: "activity", labelKey: "assetDetail.tabs.activity" },
   ];
   const [tab, setTab] = useState("summary");
@@ -446,11 +445,6 @@ export function AssetDetailContent({
         {seen.has("incidents") ? <RelatedIncidents assetId={asset.id} /> : null}
       </div>
 
-      {/* Dependencias */}
-      <div {...tabPanelProps(idBase, "dependencies")} hidden={tab !== "dependencies"} className="pt-4">
-        {seen.has("dependencies") ? <AssetDependenciesTab asset={asset} /> : null}
-      </div>
-
       {/* Actividad */}
       <div {...tabPanelProps(idBase, "activity")} hidden={tab !== "activity"} className="pt-4">
         <dl className="-mt-1">
@@ -522,6 +516,7 @@ export function AssetDetail({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <AskAiButton entity={{ type: "asset", id: asset.id }} />
+          <ViewInGraph assetId={asset.id} />
           <MoveToTrashButton asset={asset} onDeleted={onDeleted ?? (() => {})} />
           <AssetLifecycleButton asset={asset} onChanged={onChanged} />
         </div>

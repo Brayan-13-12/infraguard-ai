@@ -6,7 +6,7 @@ import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
-import { Dialog } from "@/components/ui/overlay";
+import { RelationshipFormSurface } from "./RelationshipFormSurface";
 import { useTranslation } from "@/i18n";
 import { RELATIONSHIP_DESCRIPTION_MAX_LENGTH } from "@/lib/config";
 import { updateRelationship } from "@/services/relationships";
@@ -21,10 +21,12 @@ import { relationshipTypeOptions } from "./catalog";
 export function EditRelationshipDialog({
   relationship,
   onClose,
+  inline = false,
   onSaved,
 }: {
   relationship: RelationshipDetail;
   onClose: () => void;
+  inline?: boolean;
   onSaved: (relationship: RelationshipDetail) => void;
 }) {
   const { t } = useTranslation();
@@ -50,7 +52,8 @@ export function EditRelationshipDialog({
   }
 
   return (
-    <Dialog
+    <RelationshipFormSurface
+      inline={inline}
       open
       onClose={saving ? () => {} : onClose}
       title={t("relationships.edit.title")}
@@ -95,6 +98,6 @@ export function EditRelationshipDialog({
 
         {error ? <Alert tone="danger">{error}</Alert> : null}
       </div>
-    </Dialog>
+    </RelationshipFormSurface>
   );
 }

@@ -26,12 +26,14 @@ export function NodeInspector({
   outgoingCount,
   onExpand,
   onFocus,
+  onCreateRelationship,
 }: {
   node: TopologyNode;
   incomingCount: number;
   outgoingCount: number;
   onExpand: () => void;
   onFocus: () => void;
+  onCreateRelationship?: () => void;
 }) {
   const { t } = useTranslation();
   const [impact, setImpact] = useState<
@@ -39,8 +41,10 @@ export function NodeInspector({
   >({ kind: "loading" });
 
   useEffect(() => {
+    let cancelled = false;
     setImpact({ kind: "loading" });
     void getAssetImpact(node.id, 2).then((res) => {
+      if (cancelled) return;
       if (!res.ok) {
         setImpact({ kind: "error" });
         return;
@@ -51,14 +55,14 @@ export function NodeInspector({
         names: res.data.affected_assets.slice(0, 5).map((a) => a.asset.name),
       });
     });
+    return () => { cancelled = true; };
   }, [node.id]);
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <AskAiButton entity={{ type: "asset", id: node.id }} />
       <div>
-        <h2 className="text-base font-semibold text-foreground">{node.name}</h2>
-        <p className="mt-1 text-xs text-muted-foreground">
+        <h2 className="break-words font-mono text-sm font-semibold text-foreground [overflow-wrap:anywhere]">{node.name}</h2>
+        <p className="mt-1.5 text-xs text-muted-foreground">
           {assetTypeLabel(t, node.asset_type as AssetType)} ·{" "}
           {environmentLabel(t, node.environment as Environment)}
         </p>
@@ -70,6 +74,18 @@ export function NodeInspector({
         {!node.is_active ? (
           <span className="text-xs text-muted-foreground">{t("common.inactive")}</span>
         ) : null}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Link
+          href={`/assets/${node.id}`}
+          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        >
+          {t("topology.inspector.viewAsset")}
+          <ArrowRightIcon className="h-3.5 w-3.5" />
+        </Link>
+        <AskAiButton entity={{ type: "asset", id: node.id }} />
+        {onCreateRelationship ? <Button size="sm" onClick={onCreateRelationship}>{t("topology.create.action")}</Button> : null}
       </div>
 
       <dl className="grid grid-cols-2 gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
@@ -95,7 +111,7 @@ export function NodeInspector({
         ) : impact.count === 0 ? (
           <p className="text-xs text-muted-foreground">{t("topology.inspector.impactNone")}</p>
         ) : (
-          <p className="text-xs text-foreground">
+          <p className="text-xs leading-relaxed text-foreground [overflow-wrap:anywhere]">
             {t("topology.inspector.impactCount", { count: impact.count })}
             {impact.names.length ? `: ${impact.names.join(", ")}` : ""}
           </p>
@@ -103,13 +119,6 @@ export function NodeInspector({
       </div>
 
       <div className="flex flex-col gap-2">
-        <Link
-          href={`/assets/${node.id}`}
-          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        >
-          {t("topology.inspector.viewAsset")}
-          <ArrowRightIcon className="h-3.5 w-3.5" />
-        </Link>
         <Button variant="secondary" size="sm" onClick={onFocus}>
           {t("topology.inspector.center")}
         </Button>

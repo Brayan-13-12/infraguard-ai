@@ -30,7 +30,7 @@ const replace = vi.fn((url: string) => {
 });
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace, push: vi.fn() }),
-  usePathname: () => "/dependencies",
+  usePathname: () => "/assets",
   useSearchParams: () => mockSearchParams,
 }));
 
@@ -160,7 +160,9 @@ describe("DependenciesBrowser", () => {
     renderBrowser();
     await screen.findByText("prod-api-01");
     const topologyLink = screen.getByRole("link", { name: /ver origen en topología/i });
-    expect(topologyLink).toHaveAttribute("href", "/topology?asset_id=a1");
+    expect(new URLSearchParams(mockSearchParams.toString()).get("section")).toBe("map");
+    expect(new URLSearchParams(mockSearchParams.toString()).get("view")).toBe("relations");
+    expect(topologyLink).toHaveAttribute("href", "/assets?section=map&view=graph&asset_id=a1");
   });
 
   it("debounces search and re-fetches with the term", async () => {

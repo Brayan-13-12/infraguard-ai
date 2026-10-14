@@ -57,7 +57,7 @@ export function RelationshipEdge({
         path={path}
         markerEnd={markerEnd}
         className={cn(
-          "!stroke-border",
+          "!stroke-muted-foreground/50",
           selected && "!stroke-primary",
           d?.faded && "opacity-30",
         )}
@@ -67,7 +67,7 @@ export function RelationshipEdge({
         <EdgeLabelRenderer>
           <div
             className={cn(
-              "pointer-events-none absolute rounded bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground",
+              "pointer-events-none absolute rounded border border-border/60 bg-surface px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground",
               selected && "text-primary",
               d.faded && "opacity-30",
             )}

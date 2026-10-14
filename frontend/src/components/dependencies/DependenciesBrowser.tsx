@@ -60,7 +60,7 @@ function parseParams(params: URLSearchParams): {
   };
 }
 
-export function DependenciesBrowser() {
+export function DependenciesBrowser({ title }: { title?: string } = {}) {
   const { t } = useTranslation();
   const { can } = useAuth();
   const canManage = can("relationships.manage");
@@ -100,6 +100,10 @@ export function DependenciesBrowser() {
 
   useEffect(() => {
     const qs = new URLSearchParams();
+    if (pathname === "/assets") {
+      qs.set("section", "map");
+      qs.set("view", "relations");
+    }
     if (page > 1) qs.set("page", String(page));
     if (debouncedSearch.trim()) qs.set("q", debouncedSearch.trim());
     if (filters.relationshipType) qs.set("type", filters.relationshipType);
@@ -198,7 +202,7 @@ export function DependenciesBrowser() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title={t("dependencies.title")}
+        title={title ?? t("dependencies.title")}
         description={t("dependencies.subtitle")}
         actions={
           canManage ? (

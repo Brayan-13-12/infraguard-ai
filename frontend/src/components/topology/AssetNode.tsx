@@ -2,16 +2,18 @@
 
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 
-import { CRITICALITY_TONE } from "@/components/assets/catalog";
-import { BoxIcon } from "@/components/ui/icons";
+import { assetTypeLabel, criticalityLabel, statusLabel, CRITICALITY_TONE } from "@/components/assets/catalog";
+import { AssetTypeIcon } from "./AssetTypeIcon";
 import { cn } from "@/lib/cn";
-import type { Criticality } from "@/types/asset";
+import { useTranslation } from "@/i18n";
+import { NODE_WIDTH, NODE_HEIGHT } from "./layout";
+import type { AssetType, AssetStatus, Criticality } from "@/types/asset";
 
 const ACCENT: Record<string, string> = {
-  danger: "border-l-danger",
-  warning: "border-l-warning",
-  caution: "border-l-caution",
-  success: "border-l-success",
+  danger: "border-danger/60",
+  warning: "border-warning/60",
+  caution: "border-caution/60",
+  success: "border-success/60",
 };
 
 const STATUS_DOT: Record<string, string> = {
@@ -29,48 +31,53 @@ export interface AssetNodeData extends Record<string, unknown> {
   isActive: boolean;
   isRoot: boolean;
   faded: boolean;
+  connectable?: boolean;
 }
 
 /**
  * Native InfraGuard graph node (§27): neutral surface, a criticality accent
  * bar (never one colour per asset type - only criticality/status carry
  * meaning), a small type icon, and a distinct focus/selection ring. Never
- * colour-only: the status dot always sits next to its own label text
- * elsewhere (the inspector), so this compact card is a summary, not the only
- * place status is legible.
+ * colour-only: criticality is labeled, the status dot has an accessible name,
+ * and the full details remain available in the tooltip and inspector.
  */
 export type AssetFlowNode = Node<AssetNodeData, "asset">;
 
 export function AssetNode({ data, selected }: NodeProps<AssetFlowNode>) {
   const d = data;
+  const { t } = useTranslation();
+  const type = assetTypeLabel(t, d.assetType as AssetType) || d.assetType;
+  const status = statusLabel(t, d.status as AssetStatus) || d.status;
+  const criticality = criticalityLabel(t, d.criticality as Criticality) || d.criticality;
   const accent = ACCENT[CRITICALITY_TONE[d.criticality as Criticality] ?? "success"];
   const statusDot = STATUS_DOT[d.status] ?? "bg-muted-foreground";
 
   return (
     <div
-      className={cn(
-        "flex w-[220px] items-center gap-2 rounded-lg border border-l-4 bg-surface px-3 py-2.5 shadow-xs transition-shadow",
-        accent,
-        selected ? "outline outline-2 outline-offset-2 outline-ring" : "border-border",
-        d.isRoot && "ring-2 ring-primary/50",
-        d.faded && "opacity-40",
-      )}
+      title={`${d.name} · ${type} · ${status} · ${criticality}${!d.isActive ? ` · ${t("common.inactive")}` : ""}`}
+      style={{ width: NODE_WIDTH, height: NODE_HEIGHT }}
+      className={cn("group relative flex flex-col items-center", d.faded && "opacity-40")}
     >
-      <Handle type="target" position={Position.Left} className="!bg-border" />
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-        <BoxIcon className="h-3.5 w-3.5" />
+      <div className={cn(
+        "relative flex h-10 w-10 items-center justify-center rounded-full border-2 bg-surface text-foreground shadow-xs transition-shadow motion-reduce:transition-none",
+        accent,
+        selected ? "ring-4 ring-primary/30 outline outline-2 outline-offset-2 outline-primary" : d.isRoot && "ring-2 ring-primary/25",
+        !d.isActive && "border-dashed opacity-60",
+      )}>
+        <Handle type="target" position={Position.Left} isConnectable={Boolean(d.connectable)} className={cn(
+          d.connectable ? "!h-2.5 !w-2.5 !border !border-primary/60 !bg-surface !opacity-0 group-hover:!opacity-100 group-focus-within:!opacity-100 hover:!bg-primary" : "!h-1 !w-1 !min-h-0 !min-w-0 !border-0 !bg-muted-foreground",
+          d.connectable && selected && "!opacity-100",
+        )} />
+        <AssetTypeIcon type={d.assetType} />
+        <span role="img" aria-label={status} className={cn("absolute bottom-0 right-0 h-2 w-2 rounded-full ring-2 ring-surface", statusDot)} />
+        <Handle type="source" position={Position.Right} isConnectable={Boolean(d.connectable)} className={cn(
+          d.connectable ? "!h-2.5 !w-2.5 !border !border-primary/60 !bg-surface !opacity-0 group-hover:!opacity-100 group-focus-within:!opacity-100 hover:!bg-primary" : "!h-1 !w-1 !min-h-0 !min-w-0 !border-0 !bg-muted-foreground",
+          d.connectable && selected && "!opacity-100",
+        )} />
+      </div>
+      <span className={cn("mt-2 block w-full truncate text-center font-mono text-[11px] leading-4 text-foreground", selected && "font-semibold text-primary")}>
+        {d.name}
       </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5">
-          <span className="truncate text-[13px] font-medium text-foreground">{d.name}</span>
-          <span
-            className={cn("h-1.5 w-1.5 shrink-0 rounded-full", statusDot)}
-            aria-hidden="true"
-          />
-        </span>
-        <span className="block truncate text-[11px] text-muted-foreground">{d.assetType}</span>
-      </span>
-      <Handle type="source" position={Position.Right} className="!bg-border" />
     </div>
   );
 }

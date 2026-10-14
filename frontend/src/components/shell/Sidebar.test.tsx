@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -29,10 +29,8 @@ const MODULE_LABELS = [
   "Incidents",
   "Audit",
   "Trash",
-  "Topology",
   "Administration",
   "AI Assistant",
-  "Settings",
 ];
 
 afterEach(() => vi.restoreAllMocks());
@@ -156,16 +154,17 @@ describe("Sidebar", () => {
     expect(screen.queryByText("AI Assistant")).not.toBeInTheDocument();
   });
 
-  it("renders unbuilt modules as disabled items with a quiet marker, not links", () => {
+  it.each([false, true])("omits Settings without gaps and preserves navigation order (collapsed: %s)", async (collapsed) => {
+    window.localStorage.setItem("infraguard.sidebar-collapsed", collapsed ? "1" : "0");
     renderSidebar();
-    for (const label of ["Settings"]) {
-      expect(screen.queryByRole("link", { name: label })).not.toBeInTheDocument();
-      const row = screen.getByText(label).closest("[aria-disabled='true']");
-      expect(row).toBeTruthy();
-      expect(row).toHaveAttribute("title", "Próximamente");
-    }
-    expect(screen.queryByText("Coming soon")).not.toBeInTheDocument();
-    expect(screen.queryByText(/·\s*soon/i)).not.toBeInTheDocument();
+    await screen.findByRole("link", { name: "AI Assistant" });
+    const nav = screen.getByRole("navigation");
+    expect(within(nav).queryByText(/Settings/)).not.toBeInTheDocument();
+    expect(nav.querySelector("[aria-disabled='true']")).toBeNull();
+    expect(within(nav).getAllByRole("listitem")).toHaveLength(MODULE_LABELS.length);
+    expect(within(nav).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual([
+      "/dashboard", "/assets", "/incidents", "/audit", "/trash", "/admin", "/ai",
+    ]);
   });
 
   it("keeps module labels in English", async () => {
@@ -177,11 +176,10 @@ describe("Sidebar", () => {
     }
   });
 
-  it("shows the Dependencias module - a deliberate Spanish exception to the English-labels rule", async () => {
+  it("keeps infrastructure navigation under Assets", () => {
     renderSidebar();
-    await screen.findByText("Administration");
-    const link = screen.getByRole("link", { name: "Dependencias" });
-    expect(link).toHaveAttribute("href", "/dependencies");
+    expect(screen.queryByRole("link", { name: "Dependencias" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Topology" })).toBeNull();
   });
 
   it("carries the identity, theme toggle and a sign-out control in the footer (no language switcher)", async () => {
@@ -210,14 +208,49 @@ describe("Sidebar", () => {
 
   it("collapses to an icon rail and persists the choice", async () => {
     renderSidebar();
-    const collapse = await screen.findByRole("button", { name: /contraer la navegación/i });
+    const collapse = await screen.findByRole("button", { name: /contraer barra lateral/i });
     await userEvent.click(collapse);
 
     // Visible text labels are gone; the icon link keeps an accessible name via aria-label.
     const dashboard = screen.getByRole("link", { name: "Dashboard" });
     expect(dashboard).toHaveAttribute("aria-label", "Dashboard");
     expect(dashboard.querySelector("span.flex-1")).toBeNull();
-    expect(screen.getByRole("button", { name: /expandir la navegación/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /expandir barra lateral/i })).toBeInTheDocument();
     expect(window.localStorage.getItem("infraguard.sidebar-collapsed")).toBe("1");
   });
+  it("keeps one brand-header toggle and supports keyboard collapse and expansion", async () => {
+    renderSidebar();
+    const user = userEvent.setup();
+    const button = screen.getByRole("button", { name: "Contraer barra lateral" });
+    const header = button.parentElement!;
+    expect(within(header).getByText("InfraGuard AI")).toBeVisible();
+    expect(within(header).getAllByRole("button")).toHaveLength(1);
+    expect(button).toHaveAttribute("title", "Contraer barra lateral");
+    button.focus();
+    await user.keyboard("{Enter}");
+    const expand = screen.getByRole("button", { name: "Expandir barra lateral" });
+    expect(expand).toBe(button);
+    expect(expand).toHaveFocus();
+    expect(expand).toHaveAttribute("aria-expanded", "false");
+    expect(expand).toHaveAttribute("title", "Expandir barra lateral");
+    expect(expand.querySelector("span.bg-primary svg")).toBeInTheDocument();
+    expect(within(header).getByText("InfraGuard AI")).toHaveClass("sr-only");
+    expect(within(header).getAllByRole("button")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Contraer barra lateral" })).toBeNull();
+    await user.keyboard(" ");
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(within(header).getByText("InfraGuard AI")).toBeVisible();
+    expect(window.localStorage.getItem("infraguard.sidebar-collapsed")).toBe("0");
+  });
+
+  it("restores a collapsed preference with the brand as the expand control", async () => {
+    window.localStorage.setItem("infraguard.sidebar-collapsed", "1");
+    renderSidebar();
+    const expand = screen.getByRole("button", { name: "Expandir barra lateral" });
+    expect(expand.querySelector("span.bg-primary svg")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /barra lateral/ })).toHaveLength(1);
+    await userEvent.click(expand);
+    expect(screen.getByRole("button", { name: "Contraer barra lateral" })).toBeInTheDocument();
+  });
+
 });
